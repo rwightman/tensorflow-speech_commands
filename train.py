@@ -100,7 +100,7 @@ def main(_):
       FLAGS.sample_rate, FLAGS.clip_duration_ms, FLAGS.window_size_ms,
       FLAGS.window_stride_ms, FLAGS.dct_coefficient_count)
   audio_processor = input_data.AudioProcessor(
-      FLAGS.data_url, FLAGS.data_dir, FLAGS.silence_percentage,
+      FLAGS.data_dir, FLAGS.silence_percentage,
       FLAGS.unknown_percentage,
       FLAGS.wanted_words.split(','), FLAGS.validation_percentage,
       FLAGS.testing_percentage, model_settings)
@@ -148,11 +148,13 @@ def main(_):
         tf.nn.softmax_cross_entropy_with_logits(
             labels=ground_truth_input, logits=logits))
   tf.summary.scalar('cross_entropy', cross_entropy_mean)
+
   with tf.name_scope('train'), tf.control_dependencies(control_dependencies):
     learning_rate_input = tf.placeholder(
         tf.float32, [], name='learning_rate_input')
     train_step = tf.train.GradientDescentOptimizer(
         learning_rate_input).minimize(cross_entropy_mean)
+
   predicted_indices = tf.argmax(logits, 1)
   expected_indices = tf.argmax(ground_truth_input, 1)
   correct_prediction = tf.equal(predicted_indices, expected_indices)
@@ -286,16 +288,9 @@ def main(_):
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument(
-      '--data_url',
-      type=str,
-      # pylint: disable=line-too-long
-      default='http://download.tensorflow.org/data/speech_commands_v0.01.tar.gz',
-      # pylint: enable=line-too-long
-      help='Location of speech training data archive on the web.')
-  parser.add_argument(
       '--data_dir',
       type=str,
-      default='/tmp/speech_dataset/',
+      default='/data/f/commands/train/audio',
       help="""\
       Where to download the speech training data to.
       """)
@@ -397,7 +392,9 @@ if __name__ == '__main__':
   parser.add_argument(
       '--wanted_words',
       type=str,
-      default='yes,no,up,down,left,right,on,off,stop,go',
+      default='yes,no,up,down,left,right,on,off,stop,go,'
+              'zero,one,two,three,four,five,six,seven,eight,nine,'
+              'bird,dog,cat,bed,house,tree,marvin,sheila,happy,wow',
       help='Words to use (others will be added to an unknown label)',)
   parser.add_argument(
       '--train_dir',
