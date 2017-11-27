@@ -28,8 +28,6 @@ import sys
 import tarfile
 
 import numpy as np
-from six.moves import urllib
-from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 
 from tensorflow.contrib.framework.python.ops import audio_ops as contrib_audio
@@ -157,9 +155,9 @@ class AudioProcessor(object):
                  model_settings):
         self.data_dir = data_dir
         # self.maybe_download_and_extract_dataset(data_url, data_dir)
-        self.prepare_data_index(silence_percentage, unknown_percentage,
-                                wanted_words, validation_percentage,
-                                testing_percentage)
+        self.prepare_data_index(
+            silence_percentage, unknown_percentage, wanted_words,
+            validation_percentage, testing_percentage)
         self.prepare_background_data()
         self.prepare_processing_graph(model_settings)
 
@@ -408,7 +406,7 @@ class AudioProcessor(object):
 
         # Use the processing graph we created earlier to repeatedly to generate the
         # final output sample data we'll use in training.
-        for i in xrange(offset, offset + sample_count):
+        for i in range(offset, offset + sample_count):
             # Pick which audio sample to use.
             if how_many == -1 or pick_deterministically:
                 sample_index = i

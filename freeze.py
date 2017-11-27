@@ -46,7 +46,7 @@ import tensorflow as tf
 
 from tensorflow.contrib.framework.python.ops import audio_ops as contrib_audio
 import input_data
-import models
+from models.model_factory import *
 from tensorflow.python.framework import graph_util
 
 FLAGS = None
@@ -72,7 +72,7 @@ def create_inference_graph(wanted_words, sample_rate, clip_duration_ms,
   """
 
   words_list = input_data.prepare_words_list(wanted_words.split(','))
-  model_settings = models.prepare_model_settings(
+  model_settings = prepare_model_settings(
       len(words_list), sample_rate, clip_duration_ms, window_size_ms,
       window_stride_ms, dct_coefficient_count)
   runtime_settings = {'clip_stride_ms': clip_stride_ms}
@@ -98,7 +98,7 @@ def create_inference_graph(wanted_words, sample_rate, clip_duration_ms,
       -1, fingerprint_time_size * fingerprint_frequency_size
   ])
 
-  logits = models.create_model(
+  logits = create_model(
       reshaped_input, model_settings, model_architecture, is_training=False,
       runtime_settings=runtime_settings)
 
@@ -114,7 +114,7 @@ def main(_):
                          FLAGS.clip_duration_ms, FLAGS.clip_stride_ms,
                          FLAGS.window_size_ms, FLAGS.window_stride_ms,
                          FLAGS.dct_coefficient_count, FLAGS.model_architecture)
-  models.load_variables_from_checkpoint(sess, FLAGS.start_checkpoint)
+  load_variables_from_checkpoint(sess, FLAGS.checkpoint)
 
   # Turn all the variables into inline constants inside the graph and save it.
   frozen_graph_def = graph_util.convert_variables_to_constants(
@@ -160,7 +160,7 @@ if __name__ == '__main__':
       default=40,
       help='How many bins to use for the MFCC fingerprint',)
   parser.add_argument(
-      '--start_checkpoint',
+      '--checkpoint',
       type=str,
       default='',
       help='If specified, restore this pretrained model before any training.')
