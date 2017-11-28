@@ -92,13 +92,26 @@ def main(_):
     # Start a new TensorFlow session.
     sess = tf.InteractiveSession()
 
+    if 'vggish' in FLAGS.model_architecture:
+        lower_frequency_limit = 125
+        upper_frequency_limit = 7500
+        filterbank_channel_count = dct_coefficient_count = 64
+    else:
+        lower_frequency_limit = 20
+        upper_frequency_limit = 4000
+        filterbank_channel_count = dct_coefficient_count = FLAGS.dct_coefficient_count
+
     # Begin by making sure we have the training data we need. If you already have
     # training data of your own, use `--data_url= ` on the command line to avoid
     # downloading.
     model_settings = prepare_model_settings(
         len(input_data.prepare_words_list(FLAGS.wanted_words.split(','))),
-        FLAGS.sample_rate, FLAGS.clip_duration_ms, FLAGS.window_size_ms,
-        FLAGS.window_stride_ms, FLAGS.dct_coefficient_count)
+        FLAGS.sample_rate, FLAGS.clip_duration_ms,
+        FLAGS.window_size_ms, FLAGS.window_stride_ms,
+        lower_frequency_limit=lower_frequency_limit,
+        upper_frequency_limit=upper_frequency_limit,
+        filterbank_channel_count=filterbank_channel_count,
+        dct_coefficient_count=dct_coefficient_count)
 
     print('Model settings:')
     for k, v in model_settings.items():
@@ -157,14 +170,19 @@ def main(_):
     total_loss = tf.losses.get_total_loss()
     tf.summary.scalar('total_loss', total_loss)
 
-    optimizer = tf.train.MomentumOptimizer(
-        learning_rate_input,
-        momentum=0.9,
-        use_nesterov=True)
+    if FLAGS.opt == 'adam':
+        optimizer = tf.train.AdamOptimizer(
+            learning_rate_input)
+    else:
+        optimizer = tf.train.MomentumOptimizer(
+            learning_rate_input,
+            momentum=0.9,
+            use_nesterov=True)
 
     train_step = slim.learning.create_train_op(
         total_loss,
         optimizer,
+        clip_gradient_norm=5.0,
         check_numerics=FLAGS.check_nans)
 
     predicted_indices = tf.argmax(logits, 1)
@@ -336,7 +354,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--unknown_percentage',
         type=float,
-        default=10.0,
+        default=9.0,
         help="""\
       How much of the training data should be unknown words.
       """)
@@ -355,7 +373,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--validation_percentage',
         type=int,
-        default=10,
+        default=9,
         help='What percentage of wavs to use as a validation set.')
     parser.add_argument(
         '--sample_rate',
@@ -410,9 +428,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--wanted_words',
         type=str,
-        default='yes,no,up,down,left,right,on,off,stop,go,'
-                'zero,one,two,three,four,five,six,seven,eight,nine,'
-                'bird,dog,cat,bed,house,tree,marvin,sheila,happy,wow',
+        default='yes,no,up,down,left,right,on,off,stop,go',
+                #'zero,one,two,three,four,five,six,seven,eight,nine,'
+                #'bird,dog,cat,bed,house,tree,marvin,sheila,happy,wow',
         help='Words to use (others will be added to an unknown label)', )
     parser.add_argument(
         '--train_dir',
@@ -434,6 +452,11 @@ if __name__ == '__main__':
         type=str,
         default='conv',
         help='What model architecture to use')
+    parser.add_argument(
+        '--opt',
+        type=str,
+        default='momentum',
+        help='What optimizer to use')
     parser.add_argument(
         '--check_nans',
         type=bool,

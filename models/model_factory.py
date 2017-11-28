@@ -27,12 +27,16 @@ slim = tf.contrib.slim
 from models.conv2 import conv2_args_scope, create_conv2_model
 from models.original import create_conv_model, create_low_latency_conv_model, \
     create_low_latency_svdf_model
+from models.vggish_slim import create_vggish_slim
 
 
 def prepare_model_settings(
         label_count, sample_rate, clip_duration_ms,
         window_size_ms, window_stride_ms,
-        dct_coefficient_count):
+        lower_frequency_limit=20,
+        upper_frequency_limit=4000,
+        filterbank_channel_count=40,
+        dct_coefficient_count=40):
     """Calculates common settings needed for all models.
 
     Args:
@@ -60,6 +64,9 @@ def prepare_model_settings(
         'window_size_samples': window_size_samples,
         'window_stride_samples': window_stride_samples,
         'spectrogram_length': spectrogram_length,
+        'lower_frequency_limit': lower_frequency_limit,
+        'upper_frequency_limit': upper_frequency_limit,
+        'filterbank_channel_count': filterbank_channel_count,
         'dct_coefficient_count': dct_coefficient_count,
         'fingerprint_size': fingerprint_size,
         'label_count': label_count,
@@ -111,6 +118,10 @@ def create_model(fingerprint_input, model_settings, model_architecture,
                 fingerprint_input, model_settings,
                 dropout_prob=dropout_prob, is_training=is_training)
             return model
+    elif model_architecture == 'vggish' or model_architecture == 'vggish_slim':
+        return create_vggish_slim(
+            fingerprint_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'low_latency_conv':
         return create_low_latency_conv_model(
             fingerprint_input, model_settings,

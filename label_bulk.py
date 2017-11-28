@@ -103,6 +103,9 @@ def _load_fingerprint(
     fingerprint_input = contrib_audio.mfcc(
         spectrogram,
         decoded_sample_data.sample_rate,
+        lower_frequency_limit=model_settings['lower_frequency_limit'],
+        upper_frequency_limit=model_settings['upper_frequency_limit'],
+        filterbank_channel_count=model_settings['filterbank_channel_count'],
         dct_coefficient_count=model_settings['dct_coefficient_count'])
     fingerprint_frequency_size = model_settings['dct_coefficient_count']
     fingerprint_time_size = model_settings['spectrogram_length']
@@ -145,12 +148,28 @@ def main(_):
 
     labels_list = load_labels(FLAGS.labels)
 
+    if 'vggish' in FLAGS.model_architecture:
+        lower_frequency_limit = 125
+        upper_frequency_limit = 7500
+        filterbank_channel_count = dct_coefficient_count = 64
+    else:
+        lower_frequency_limit = 20
+        upper_frequency_limit = 4000
+        filterbank_channel_count = dct_coefficient_count = FLAGS.dct_coefficient_count
+
     words_list = input_data.prepare_words_list(FLAGS.wanted_words.split(','))
     model_settings = prepare_model_settings(
         len(words_list), FLAGS.sample_rate, FLAGS.clip_duration_ms,
         FLAGS.window_size_ms, FLAGS.window_stride_ms,
-        FLAGS.dct_coefficient_count)
+        lower_frequency_limit=lower_frequency_limit,
+        upper_frequency_limit=upper_frequency_limit,
+        filterbank_channel_count=filterbank_channel_count,
+        dct_coefficient_count=dct_coefficient_count)
     runtime_settings = {'clip_stride_ms': FLAGS.clip_stride_ms}
+
+    print('Model settings:')
+    for k, v in model_settings.items():
+        print(k, v)
 
     dataset, filenames = get_inputs(
         FLAGS.wav,
@@ -260,9 +279,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--wanted_words',
         type=str,
-        default='yes,no,up,down,left,right,on,off,stop,go,'
-                'zero,one,two,three,four,five,six,seven,eight,nine,'
-                'bird,dog,cat,bed,house,tree,marvin,sheila,happy,wow',
+        default='yes,no,up,down,left,right,on,off,stop,go',
+                #'zero,one,two,three,four,five,six,seven,eight,nine,'
+                #'bird,dog,cat,bed,house,tree,marvin,sheila,happy,wow',
         help='Words to use (others will be added to an unknown label)', )
     parser.add_argument(
         '--include_probs',

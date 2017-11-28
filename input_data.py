@@ -352,6 +352,9 @@ class AudioProcessor(object):
         self.mfcc_ = contrib_audio.mfcc(
             spectrogram,
             wav_decoder.sample_rate,
+            lower_frequency_limit=model_settings['lower_frequency_limit'],
+            upper_frequency_limit=model_settings['upper_frequency_limit'],
+            filterbank_channel_count=model_settings['filterbank_channel_count'],
             dct_coefficient_count=model_settings['dct_coefficient_count'])
 
     def set_size(self, mode):
