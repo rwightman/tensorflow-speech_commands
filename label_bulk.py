@@ -148,7 +148,7 @@ def main(_):
 
     labels_list = load_labels(FLAGS.labels)
 
-    if 'vggish' in FLAGS.model_architecture:
+    if any(n in FLAGS.model_architecture for n in ['vggish', 'nasnet', 'resnet']):
         lower_frequency_limit = 125
         upper_frequency_limit = 7500
         filterbank_channel_count = dct_coefficient_count = 64
@@ -178,10 +178,13 @@ def main(_):
     iterator = dataset.make_one_shot_iterator()
     inputs = iterator.get_next()
 
-    logits = create_model(
+    net = create_model(
         inputs, model_settings, FLAGS.model_architecture,
         runtime_settings=runtime_settings)
-
+    if isinstance(net, tuple):
+        logits, endpoints = net
+    else:
+        logits, endpoints = net, {}
     predicted_indices_op = tf.argmax(logits, 1)
     predicted_probs_op = tf.reduce_max(tf.nn.softmax(logits), 1)
 

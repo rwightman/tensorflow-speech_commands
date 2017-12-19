@@ -52,7 +52,7 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-from nets import resnet_utils
+from models import resnet_utils
 
 slim = tf.contrib.slim
 resnet_arg_scope = resnet_utils.resnet_arg_scope
@@ -207,7 +207,7 @@ def resnet_v2(inputs,
         # Convert end_points_collection into a dictionary of end_points.
         end_points = slim.utils.convert_collection_to_dict(
             end_points_collection)
-
+        print(net.shape)
         if global_pool:
           # Global average pooling.
           net = tf.reduce_mean(net, [1, 2], name='pool5', keep_dims=True)
@@ -269,6 +269,47 @@ def resnet_v2_50(inputs,
                    include_root_block=True, spatial_squeeze=spatial_squeeze,
                    reuse=reuse, scope=scope)
 resnet_v2_50.default_image_size = resnet_v2.default_image_size
+
+
+def create_resnet_v2_50(
+        fingerprint_input,
+        model_settings,
+        dropout_prob=0.7,
+        is_training=True,
+        global_pool=True,
+        output_stride=16,
+        scope='resnet_v2_50'):
+
+  input_frequency_size = model_settings['dct_coefficient_count']
+  input_time_size = model_settings['spectrogram_length']
+  fingerprint_4d = tf.reshape(
+        fingerprint_input, [-1, input_time_size, input_frequency_size, 1])
+
+  """ResNet-50 model of [1]. See resnet_v2() for arg and return description."""
+  blocks = [
+      resnet_v2_block('block1', base_depth=64, num_units=3, stride=2),
+      resnet_v2_block('block2', base_depth=128, num_units=4, stride=2),
+      resnet_v2_block('block3', base_depth=256, num_units=6, stride=2),
+      resnet_v2_block('block4', base_depth=512, num_units=3, stride=1),
+  ]
+  with slim.arg_scope(resnet_arg_scope()):
+    net, endpoints = resnet_v2(fingerprint_4d, blocks, num_classes=None,
+                      is_training=is_training, global_pool=global_pool,
+                      output_stride=output_stride, include_root_block=True, scope=scope)
+    print(net.shape)
+    with slim.arg_scope(
+            [slim.fully_connected],
+            weights_initializer=tf.truncated_normal_initializer(stddev=0.01),
+            biases_initializer=tf.zeros_initializer()),\
+         slim.arg_scope(
+             [slim.dropout],
+             is_training=is_training):
+        net = tf.squeeze(net, [1, 2], name='SpatialSqueeze')
+        net = slim.dropout(net, dropout_prob)
+        final_fc = slim.fully_connected(
+            net, model_settings['label_count'], activation_fn=None)
+
+    return final_fc
 
 
 def resnet_v2_101(inputs,

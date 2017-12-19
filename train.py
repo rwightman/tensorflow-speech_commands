@@ -92,7 +92,7 @@ def main(_):
     # Start a new TensorFlow session.
     sess = tf.InteractiveSession()
 
-    if 'vggish' in FLAGS.model_architecture:
+    if any(n in FLAGS.model_architecture for n in ['vggish', 'nasnet', 'resnet']):
         lower_frequency_limit = 125
         upper_frequency_limit = 7500
         filterbank_channel_count = dct_coefficient_count = 64
@@ -151,12 +151,18 @@ def main(_):
     is_training_input = tf.placeholder_with_default(True, [], name='is_training_input')
 
     # Instantiate model graph
-    logits = create_model(
+    net = create_model(
         fingerprint_input,
         model_settings,
         FLAGS.model_architecture,
-        dropout_prob=0.7,
+        dropout_prob=0.6,
         is_training=is_training_input)
+    if isinstance(net, tuple):
+        logits, endpoints = net
+    else:
+        logits, endpoints = net, {}
+    print(endpoints)
+    print(net)
 
     for variable in slim.get_model_variables():
         tf.summary.histogram(variable.op.name, variable)
@@ -164,6 +170,10 @@ def main(_):
     # Define loss and optimizer
     cross_entropy_op = tf.losses.softmax_cross_entropy(
         onehot_labels=ground_truth_input, logits=logits, label_smoothing=0.1)
+    if 'AuxLogits' in endpoints:
+        tf.losses.softmax_cross_entropy(
+            onehot_labels=ground_truth_input, logits=endpoints['AuxLogits'],
+            label_smoothing=0.1, weights=0.4, scope='aux_loss')
 
     for loss in tf.get_collection(tf.GraphKeys.LOSSES):
         tf.summary.scalar('losses/%s' % loss.op.name, loss)
@@ -226,6 +236,8 @@ def main(_):
     # Training loop.
     training_steps_max = np.sum(training_steps_list)
     for training_step in range(start_step, training_steps_max + 1):
+        is_last_step = (training_step == training_steps_max)
+
         # Figure out what the current learning rate is.
         training_steps_sum = 0
         for i in range(len(training_steps_list)):
@@ -240,26 +252,31 @@ def main(_):
             FLAGS.background_volume, time_shift_samples, 'training', sess)
 
         # Run the graph with this batch of training data.
-        train_summary, train_accuracy, cross_entropy_value, _, _ = sess.run(
-            [
-                merged_summaries,
-                evaluation_step,
-                train_step,
-                cross_entropy_op,
-                increment_global_step
-            ],
+        ops = {
+            'evaluation_step': evaluation_step,
+            'train_step': train_step,
+            'cross_entropy_op': cross_entropy_op,
+            'increment_global_step': increment_global_step,
+        }
+        if (training_step % 500) == 0 or is_last_step:
+            ops['merged_summaries'] = merged_summaries
+
+        results = sess.run(
+            ops,
             feed_dict={
                 fingerprint_input: train_fingerprints,
                 ground_truth_input: train_ground_truth,
                 learning_rate_input: learning_rate_value,
                 is_training_input: True,
             })
-        train_writer.add_summary(train_summary, training_step)
+        train_accuracy = results['evaluation_step']
+        cross_entropy_value = results['train_step']  #results['cross_entropy_op']
+        if 'merged_summaries' in results:
+            train_writer.add_summary(results['merged_summaries'], training_step)
         tf.logging.info('Step #%d: rate %f, accuracy %.1f%%, cross entropy %f' %
                         (training_step, learning_rate_value, train_accuracy * 100,
                          cross_entropy_value))
 
-        is_last_step = (training_step == training_steps_max)
         if (training_step % FLAGS.eval_step_interval) == 0 or is_last_step:
             eval_set_size = audio_processor.set_size('validation')
             total_accuracy = 0
@@ -403,7 +420,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--how_many_training_steps',
         type=str,
-        default='2000,10000,5000,3000',
+        default='10000,7000,5000',  #'3000,10000,7000,5000',
         help='How many training loops to run', )
     parser.add_argument(
         '--eval_step_interval',
@@ -413,12 +430,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--learning_rate',
         type=str,
-        default='.00001,0.001,0.0001,0.00001',
+        default='0.001,0.0001,0.00001',  #'.00001,0.001,0.0001,0.00001',
         help='How large a learning rate to use when training.')
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=256,
+        default=512,
         help='How many items to train with at once', )
     parser.add_argument(
         '--summaries_dir',

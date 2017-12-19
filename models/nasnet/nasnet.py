@@ -22,7 +22,7 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-from nets.nasnet import nasnet_utils
+from models.nasnet import nasnet_utils
 
 arg_scope = tf.contrib.framework.arg_scope
 slim = tf.contrib.slim
@@ -429,6 +429,12 @@ def _build_nasnet_base(images,
                        final_endpoint=None):
   """Constructs a NASNet image model."""
 
+  is_training_value = False
+  try:
+    is_training_value = tf.contrib.util.constant_value(is_training)
+  except TypeError:
+    pass
+
   end_points = {}
   def add_and_check_endpoint(endpoint_name, net):
     end_points[endpoint_name] = net
@@ -489,7 +495,7 @@ def _build_nasnet_base(images,
       return net, end_points
     true_cell_num += 1
     if (hparams.use_aux_head and cell_num in aux_head_cell_idxes and
-        num_classes and is_training):
+        num_classes and is_training_value):
       aux_net = tf.nn.relu(net)
       _build_aux_head(aux_net, end_points, num_classes, hparams,
                       scope='aux_{}'.format(cell_num))
@@ -511,3 +517,21 @@ def _build_nasnet_base(images,
     if add_and_check_endpoint('Predictions', predictions):
       return net, end_points
   return logits, end_points
+
+
+def create_nasnetm(fingerprint_input, model_settings, dropout_prob=0.8, is_training=False):
+    # # Input: a batch of 2-D log-mel-spectrogram patches.
+    # features = tf.placeholder(
+    #   tf.float32, shape=(None, params.NUM_FRAMES, params.NUM_BANDS),
+    #   name='input_features')
+    # # Reshape to 4-D so that we can convolve a batch with conv2d().
+    # net = tf.reshape(features, [-1, params.NUM_FRAMES, params.NUM_BANDS, 1])
+    input_frequency_size = model_settings['dct_coefficient_count']
+    input_time_size = model_settings['spectrogram_length']
+    fingerprint_4d = tf.reshape(
+        fingerprint_input, [-1, input_time_size, input_frequency_size, 1])
+
+    with slim.arg_scope(nasnet_mobile_arg_scope()):
+        net, endpoints = build_nasnet_mobile(fingerprint_4d, model_settings['label_count'], is_training)
+
+    return net, endpoints

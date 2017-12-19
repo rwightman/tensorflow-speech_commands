@@ -28,6 +28,8 @@ from models.conv2 import conv2_args_scope, create_conv2_model
 from models.original import create_conv_model, create_low_latency_conv_model, \
     create_low_latency_svdf_model
 from models.vggish_slim import create_vggish_slim
+from models.nasnet.nasnet import create_nasnetm
+from models.resnet_v2 import create_resnet_v2_50
 
 
 def prepare_model_settings(
@@ -120,6 +122,14 @@ def create_model(fingerprint_input, model_settings, model_architecture,
             return model
     elif model_architecture == 'vggish' or model_architecture == 'vggish_slim':
         return create_vggish_slim(
+            fingerprint_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'resnet50':
+        return create_resnet_v2_50(
+            fingerprint_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'nasnetm':
+        return create_nasnetm(
             fingerprint_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'low_latency_conv':

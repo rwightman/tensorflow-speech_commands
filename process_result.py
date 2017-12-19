@@ -45,7 +45,7 @@ def main():
     results['label'] = results['label'].map(
         lambda x: x if x in accept else 'unknown')
     results['label'] = results.apply(
-        lambda x: x['label'] if x['prob'] >= args.thresh else 'unknown', axis=1)
+        lambda x: x['label'] if x['prob'] >= args.thresh else 'silence', axis=1)
     results = results[['fname', 'label']]
     results.to_csv(args.output, index=False)
 
