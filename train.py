@@ -93,37 +93,50 @@ def main(_):
     # Start a new TensorFlow session.
     sess = tf.InteractiveSession()
 
-    if any(n in FLAGS.model for n in ['vggish', 'nasnet', 'resnet']):
-        lower_frequency_limit = 125
-        upper_frequency_limit = 7500
-        filterbank_channel_count = dct_coefficient_count = 64
+    num_words = len(input_data.prepare_words_list(FLAGS.wanted_words.split(',')))
+    if any(n in FLAGS.model for n in ['conv1d']):
+        model_settings = prepare_model_settings(
+            num_words,
+            FLAGS.sample_rate,
+            FLAGS.clip_duration_ms,
+            input_format='raw')
+    elif any(n in FLAGS.model for n in ['vggish', 'nasnet', 'resnet']):
+        model_settings = prepare_model_settings(
+            num_words,
+            FLAGS.sample_rate,
+            FLAGS.clip_duration_ms,
+            input_format='spectrogram',
+            window_size_ms=FLAGS.window_size_ms,
+            window_stride_ms=FLAGS.window_stride_ms,
+            lower_frequency_limit=125,
+            upper_frequency_limit=7500,
+            filterbank_channel_count=64,
+            dct_coefficient_count=64)
     else:
-        lower_frequency_limit = 20
-        upper_frequency_limit = 4000
-        filterbank_channel_count = dct_coefficient_count = FLAGS.dct_coefficient_count
-
-    # Begin by making sure we have the training data we need. If you already have
-    # training data of your own, use `--data_url= ` on the command line to avoid
-    # downloading.
-    model_settings = prepare_model_settings(
-        len(input_data.prepare_words_list(FLAGS.wanted_words.split(','))),
-        FLAGS.sample_rate, FLAGS.clip_duration_ms,
-        FLAGS.window_size_ms, FLAGS.window_stride_ms,
-        lower_frequency_limit=lower_frequency_limit,
-        upper_frequency_limit=upper_frequency_limit,
-        filterbank_channel_count=filterbank_channel_count,
-        dct_coefficient_count=dct_coefficient_count)
+        model_settings = prepare_model_settings(
+            num_words,
+            FLAGS.sample_rate,
+            FLAGS.clip_duration_ms,
+            input_format='spectrogram',
+            window_size_ms=FLAGS.window_size_ms,
+            window_stride_ms=FLAGS.window_stride_ms,
+            lower_frequency_limit=20,
+            upper_frequency_limit=4000,
+            filterbank_channel_count=FLAGS.dct_coefficient_count,
+            dct_coefficient_count=FLAGS.dct_coefficient_count)
 
     print('Model settings:')
     for k, v in model_settings.items():
         print(k, v)
 
     audio_processor = input_data.AudioProcessor(
-        FLAGS.data_dir, FLAGS.silence_percentage,
+        FLAGS.data_dir,
+        FLAGS.silence_percentage,
         FLAGS.unknown_percentage,
-        FLAGS.wanted_words.split(','), FLAGS.validation_percentage,
+        FLAGS.wanted_words.split(','),
+        FLAGS.validation_percentage,
         FLAGS.testing_percentage, model_settings)
-    fingerprint_size = model_settings['fingerprint_size']
+    sample_size = model_settings['sample_size']
     label_count = model_settings['label_count']
     time_shift_samples = int((FLAGS.time_shift_ms * FLAGS.sample_rate) / 1000)
 
@@ -143,8 +156,8 @@ def main(_):
                                                        len(learning_rates_list)))
 
     # Create placeholder variables
-    fingerprint_input = tf.placeholder(
-        tf.float32, [None, fingerprint_size], name='fingerprint_input')
+    sample_input = tf.placeholder(
+        tf.float32, [None, sample_size], name='sample_input')
     ground_truth_input = tf.placeholder(
         tf.float32, [None, label_count], name='groundtruth_input')
     learning_rate_input = tf.placeholder(
@@ -153,7 +166,7 @@ def main(_):
 
     # Instantiate model graph
     net = create_model(
-        fingerprint_input,
+        sample_input,
         model_settings,
         FLAGS.model,
         dropout_prob=0.6,
@@ -251,7 +264,7 @@ def main(_):
                 break
 
         # Pull the audio samples we'll use for training.
-        train_fingerprints, train_ground_truth = audio_processor.get_data(
+        train_samples, train_ground_truth = audio_processor.get_data(
             FLAGS.batch_size, 0, model_settings, FLAGS.background_frequency,
             FLAGS.background_volume, time_shift_samples, 'training', sess)
 
@@ -268,7 +281,7 @@ def main(_):
         results = sess.run(
             ops,
             feed_dict={
-                fingerprint_input: train_fingerprints,
+                sample_input: train_samples,
                 ground_truth_input: train_ground_truth,
                 learning_rate_input: learning_rate_value,
                 is_training_input: True,
@@ -286,15 +299,16 @@ def main(_):
             total_accuracy = 0
             total_conf_matrix = None
             for i in range(0, eval_set_size, FLAGS.batch_size):
-                validation_fingerprints, validation_ground_truth = (
+                validation_samples, validation_ground_truth = (
                     audio_processor.get_data(FLAGS.batch_size, i, model_settings, 0.0,
                                              0.0, 0, 'validation', sess))
+
                 # Run a validation step and capture training summaries for TensorBoard
                 # with the `merged` op.
                 validation_summary, validation_accuracy, conf_matrix = sess.run(
                     [merged_summaries, evaluation_step, confusion_matrix],
                     feed_dict={
-                        fingerprint_input: validation_fingerprints,
+                        sample_input: validation_samples,
                         ground_truth_input: validation_ground_truth,
                         is_training_input: False,
                     })
@@ -321,12 +335,12 @@ def main(_):
     total_accuracy = 0
     total_conf_matrix = None
     for i in range(0, test_set_size, FLAGS.batch_size):
-        test_fingerprints, test_ground_truth = audio_processor.get_data(
+        test_samples, test_ground_truth = audio_processor.get_data(
             FLAGS.batch_size, i, model_settings, 0.0, 0.0, 0, 'testing', sess)
         test_accuracy, conf_matrix = sess.run(
             [evaluation_step, confusion_matrix],
             feed_dict={
-                fingerprint_input: test_fingerprints,
+                sample_input: test_samples,
                 ground_truth_input: test_ground_truth,
                 is_training_input: False,
             })

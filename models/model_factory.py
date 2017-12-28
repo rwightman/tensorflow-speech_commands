@@ -23,6 +23,7 @@ import math
 
 import tensorflow as tf
 
+from models.conv1d import create_conv1d_model
 from models.conv2d import create_conv2d_model
 from models.original import create_conv_model, create_low_latency_conv_model, \
     create_low_latency_svdf_model
@@ -32,8 +33,12 @@ from models.resnet_v2 import create_resnet_v2_50, create_resnet_v2_xx
 
 
 def prepare_model_settings(
-        label_count, sample_rate, clip_duration_ms,
-        window_size_ms, window_stride_ms,
+        label_count,
+        sample_rate,
+        clip_duration_ms,
+        input_format='spectrogram',
+        window_size_ms=30,
+        window_stride_ms=10,
         lower_frequency_limit=20,
         upper_frequency_limit=4000,
         filterbank_channel_count=40,
@@ -52,30 +57,42 @@ def prepare_model_settings(
       Dictionary containing common settings.
     """
     desired_samples = int(sample_rate * clip_duration_ms / 1000)
-    window_size_samples = int(sample_rate * window_size_ms / 1000)
-    window_stride_samples = int(sample_rate * window_stride_ms / 1000)
-    length_minus_window = (desired_samples - window_size_samples)
-    if length_minus_window < 0:
-        spectrogram_length = 0
+    if input_format == 'spectrogram':
+        window_size_samples = int(sample_rate * window_size_ms / 1000)
+        window_stride_samples = int(sample_rate * window_stride_ms / 1000)
+        length_minus_window = (desired_samples - window_size_samples)
+        if length_minus_window < 0:
+            spectrogram_length = 0
+        else:
+            spectrogram_length = 1 + int(length_minus_window / window_stride_samples)
+        fingerprint_size = dct_coefficient_count * spectrogram_length
+        return {
+            'desired_samples': desired_samples,
+            'window_size_samples': window_size_samples,
+            'window_stride_samples': window_stride_samples,
+            'spectrogram_length': spectrogram_length,
+            'lower_frequency_limit': lower_frequency_limit,
+            'upper_frequency_limit': upper_frequency_limit,
+            'filterbank_channel_count': filterbank_channel_count,
+            'dct_coefficient_count': dct_coefficient_count,
+            'sample_size': fingerprint_size,
+            'label_count': label_count,
+            'sample_rate': sample_rate,
+            'input_format': input_format,
+        }
+    elif input_format == 'raw':
+        return {
+            'desired_samples': desired_samples,
+            'label_count': label_count,
+            'sample_rate': sample_rate,
+            'sample_size': desired_samples,
+            'input_format': input_format
+        }
     else:
-        spectrogram_length = 1 + int(length_minus_window / window_stride_samples)
-    fingerprint_size = dct_coefficient_count * spectrogram_length
-    return {
-        'desired_samples': desired_samples,
-        'window_size_samples': window_size_samples,
-        'window_stride_samples': window_stride_samples,
-        'spectrogram_length': spectrogram_length,
-        'lower_frequency_limit': lower_frequency_limit,
-        'upper_frequency_limit': upper_frequency_limit,
-        'filterbank_channel_count': filterbank_channel_count,
-        'dct_coefficient_count': dct_coefficient_count,
-        'fingerprint_size': fingerprint_size,
-        'label_count': label_count,
-        'sample_rate': sample_rate,
-    }
+        assert False, "Invalid input format"
 
 
-def create_model(fingerprint_input, model_settings, model_architecture,
+def create_model(sample_input, model_settings, model_architecture,
                  dropout_prob=1.0, is_training=False, runtime_settings=None):
     """Builds a model of the requested architecture compatible with the settings.
 
@@ -96,7 +113,7 @@ def create_model(fingerprint_input, model_settings, model_architecture,
     requested.
 
     Args:
-      fingerprint_input: TensorFlow node that will output audio feature vectors.
+      sample_input: TensorFlow node that will output audio feature vectors.
       model_settings: Dictionary of information about the model.
       model_architecture: String specifying which kind of model to create.
       is_training: Whether the model is going to be used for training.
@@ -111,35 +128,39 @@ def create_model(fingerprint_input, model_settings, model_architecture,
     """
     if model_architecture == 'conv':
         return create_conv_model(
-            fingerprint_input, model_settings,
+            sample_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'conv1d':
+        return create_conv1d_model(
+            sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'conv2d':
         return create_conv2d_model(
-            fingerprint_input, model_settings,
+            sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'vggish' or model_architecture == 'vggish_slim':
         return create_vggish_slim(
-            fingerprint_input, model_settings,
+            sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'resnetxx':
         return create_resnet_v2_xx(
-            fingerprint_input, model_settings,
+            sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'resnet50':
         return create_resnet_v2_50(
-            fingerprint_input, model_settings,
+            sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'nasnetm':
         return create_nasnetm(
-            fingerprint_input, model_settings,
+            sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'low_latency_conv':
         return create_low_latency_conv_model(
-            fingerprint_input, model_settings,
+            sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'low_latency_svdf':
         return create_low_latency_svdf_model(
-            fingerprint_input, model_settings,
+            sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training,
             runtime_settings=runtime_settings)
     else:

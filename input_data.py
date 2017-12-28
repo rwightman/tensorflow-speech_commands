@@ -135,8 +135,8 @@ def save_wav_file(filename, wav_data, sample_rate):
         wav_filename_placeholder = tf.placeholder(tf.string, [])
         sample_rate_placeholder = tf.placeholder(tf.int32, [])
         wav_data_placeholder = tf.placeholder(tf.float32, [None, 1])
-        wav_encoder = contrib_audio.encode_wav(wav_data_placeholder,
-                                               sample_rate_placeholder)
+        wav_encoder = contrib_audio.encode_wav(
+            wav_data_placeholder, sample_rate_placeholder)
         wav_saver = io_ops.write_file(wav_filename_placeholder, wav_encoder)
         sess.run(
             wav_saver,
@@ -155,15 +155,15 @@ class AudioProcessor(object):
                  model_settings):
         self.data_dir = data_dir
         # self.maybe_download_and_extract_dataset(data_url, data_dir)
-        self.prepare_data_index(
+        self.prepare_data_index_(
             silence_percentage, unknown_percentage, wanted_words,
             validation_percentage, testing_percentage)
-        self.prepare_background_data()
-        self.prepare_processing_graph(model_settings)
+        self.prepare_background_data_()
+        self.prepare_processing_graph_(model_settings)
 
-    def prepare_data_index(self, silence_percentage, unknown_percentage,
-                           wanted_words, validation_percentage,
-                           testing_percentage):
+    def prepare_data_index_(self, silence_percentage, unknown_percentage,
+                            wanted_words, validation_percentage,
+                            testing_percentage):
         """Prepares a list of the samples organized by set and label.
 
         The training loop needs a list of all the available data, organized by
@@ -252,7 +252,7 @@ class AudioProcessor(object):
                 self.word_to_index[word] = UNKNOWN_WORD_INDEX
         self.word_to_index[SILENCE_LABEL] = SILENCE_INDEX
 
-    def prepare_background_data(self):
+    def prepare_background_data_(self):
         """Searches a folder for background noise audio, and loads it into memory.
 
         It's expected that the background audio samples will be in a subdirectory
@@ -289,7 +289,7 @@ class AudioProcessor(object):
             if not self.background_data:
                 raise Exception('No background wav files were found in ' + search_path)
 
-    def prepare_processing_graph(self, model_settings):
+    def prepare_processing_graph_(self, model_settings):
         """Builds a TensorFlow graph to apply the input distortions.
 
         Creates a graph that loads a WAVE file, decodes it, scales the volume,
@@ -343,19 +343,24 @@ class AudioProcessor(object):
         background_add = tf.add(background_mul, sliced_foreground)
         background_clamp = tf.clip_by_value(background_add, -1.0, 1.0)
 
-        # Run the spectrogram and MFCC ops to get a 2D 'fingerprint' of the audio.
-        spectrogram = contrib_audio.audio_spectrogram(
-            background_clamp,
-            window_size=model_settings['window_size_samples'],
-            stride=model_settings['window_stride_samples'],
-            magnitude_squared=True)
-        self.mfcc_ = contrib_audio.mfcc(
-            spectrogram,
-            wav_decoder.sample_rate,
-            lower_frequency_limit=model_settings['lower_frequency_limit'],
-            upper_frequency_limit=model_settings['upper_frequency_limit'],
-            filterbank_channel_count=model_settings['filterbank_channel_count'],
-            dct_coefficient_count=model_settings['dct_coefficient_count'])
+        if model_settings['input_format'] == 'raw':
+            self.processed_input_ = background_clamp
+        else:
+            assert model_settings['input_format'] == 'spectrogram'
+            # Run the spectrogram and MFCC ops to get a 2D 'fingerprint' of the audio.
+            spectrogram = contrib_audio.audio_spectrogram(
+                background_clamp,
+                window_size=model_settings['window_size_samples'],
+                stride=model_settings['window_stride_samples'],
+                magnitude_squared=True)
+
+            self.processed_input_ = contrib_audio.mfcc(
+                spectrogram,
+                wav_decoder.sample_rate,
+                lower_frequency_limit=model_settings['lower_frequency_limit'],
+                upper_frequency_limit=model_settings['upper_frequency_limit'],
+                filterbank_channel_count=model_settings['filterbank_channel_count'],
+                dct_coefficient_count=model_settings['dct_coefficient_count'])
 
     def set_size(self, mode):
         """Calculates the number of samples in the dataset partition.
@@ -401,7 +406,7 @@ class AudioProcessor(object):
             sample_count = max(0, min(how_many, len(candidates) - offset))
 
         # Data and labels will be populated and returned.
-        data = np.zeros((sample_count, model_settings['fingerprint_size']))
+        data = np.zeros((sample_count, model_settings['sample_size']))
         labels = np.zeros((sample_count, model_settings['label_count']))
         desired_samples = model_settings['desired_samples']
         use_background = self.background_data and (mode == 'training')
@@ -458,8 +463,11 @@ class AudioProcessor(object):
                 input_dict[self.foreground_volume_placeholder_] = 0
             else:
                 input_dict[self.foreground_volume_placeholder_] = 1
+
             # Run the graph to produce the output audio.
-            data[i - offset, :] = sess.run(self.mfcc_, feed_dict=input_dict).flatten()
+            data[i - offset, :] = sess.run(
+                self.processed_input_,
+                feed_dict=input_dict).flatten()
             label_index = self.word_to_index[sample['label']]
             labels[i - offset, label_index] = 1
 
@@ -503,11 +511,15 @@ class AudioProcessor(object):
                     sample_index = np.random.randint(len(candidates))
                 sample = candidates[sample_index]
                 input_dict = {wav_filename_placeholder: sample['file']}
+
                 if sample['label'] == SILENCE_LABEL:
                     input_dict[foreground_volume_placeholder] = 0
                 else:
                     input_dict[foreground_volume_placeholder] = 1
-                data[i, :] = sess.run(scaled_foreground, feed_dict=input_dict).flatten()
+
+                data[i, :] = sess.run(
+                    scaled_foreground,
+                    feed_dict=input_dict).flatten()
                 label_index = self.word_to_index[sample['label']]
                 labels.append(words_list[label_index])
 
