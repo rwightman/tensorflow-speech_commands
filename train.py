@@ -73,6 +73,7 @@ from __future__ import print_function
 import argparse
 import os.path
 import sys
+from datetime import datetime
 
 import numpy as np
 import tensorflow as tf
@@ -92,7 +93,7 @@ def main(_):
     # Start a new TensorFlow session.
     sess = tf.InteractiveSession()
 
-    if any(n in FLAGS.model_architecture for n in ['vggish', 'nasnet', 'resnet']):
+    if any(n in FLAGS.model for n in ['vggish', 'nasnet', 'resnet']):
         lower_frequency_limit = 125
         upper_frequency_limit = 7500
         filterbank_channel_count = dct_coefficient_count = 64
@@ -154,7 +155,7 @@ def main(_):
     net = create_model(
         fingerprint_input,
         model_settings,
-        FLAGS.model_architecture,
+        FLAGS.model,
         dropout_prob=0.6,
         is_training=is_training_input)
     if isinstance(net, tuple):
@@ -208,10 +209,15 @@ def main(_):
 
     saver = tf.train.Saver(tf.global_variables())
 
+    exp_name = '-'.join([
+        datetime.now().strftime("%Y%m%d-%H%M%S"),
+        FLAGS.model])
+    output_dir = get_outdir(FLAGS.output_dir, 'train', exp_name)
+
     # Merge all the summaries and write them out to /tmp/retrain_logs (by default)
     merged_summaries = tf.summary.merge_all()
-    train_writer = tf.summary.FileWriter(FLAGS.summaries_dir + '/train', sess.graph)
-    validation_writer = tf.summary.FileWriter(FLAGS.summaries_dir + '/validation')
+    train_writer = tf.summary.FileWriter(output_dir + '/train', sess.graph)
+    validation_writer = tf.summary.FileWriter(output_dir + '/validation')
 
     tf.global_variables_initializer().run()
 
@@ -224,13 +230,11 @@ def main(_):
     tf.logging.info('Training from step: %d ', start_step)
 
     # Save graph.pbtxt.
-    tf.train.write_graph(
-        sess.graph_def, FLAGS.train_dir, FLAGS.model_architecture + '.pbtxt')
+    tf.train.write_graph(sess.graph_def, output_dir, FLAGS.model + '.pbtxt')
 
     # Save list of words.
     with gfile.GFile(
-            os.path.join(FLAGS.train_dir, FLAGS.model_architecture + '_labels.txt'),
-            'w') as f:
+            os.path.join(output_dir, FLAGS.model + '_labels.txt'), 'w') as f:
         f.write('\n'.join(audio_processor.words_list))
 
     # Training loop.
@@ -308,8 +312,7 @@ def main(_):
         # Save the model checkpoint periodically.
         if (training_step % FLAGS.save_step_interval == 0 or
                     training_step == training_steps_max):
-            checkpoint_path = os.path.join(
-                FLAGS.train_dir, FLAGS.model_architecture + '.ckpt')
+            checkpoint_path = os.path.join(output_dir, FLAGS.model + '.ckpt')
             tf.logging.info('Saving to "%s-%d"', checkpoint_path, training_step)
             saver.save(sess, checkpoint_path, global_step=training_step)
 
@@ -338,6 +341,22 @@ def main(_):
                     (total_accuracy * 100, test_set_size))
 
 
+def get_outdir(path, *paths, inc=False):
+    outdir = os.path.join(path, *paths)
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    elif inc:
+        count = 1
+        outdir_inc = outdir + '-' + str(count)
+        while os.path.exists(outdir_inc):
+            count = count + 1
+            outdir_inc = outdir + '-' + str(count)
+            assert count < 100
+        outdir = outdir_inc
+        os.makedirs(outdir)
+    return outdir
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -350,7 +369,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--background_volume',
         type=float,
-        default=0.2,
+        default=0.1,
         help="""\
       How loud the background noise should be, between 0 and 1.
       """)
@@ -420,7 +439,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--how_many_training_steps',
         type=str,
-        default='10000,7000,5000',  #'3000,10000,7000,5000',
+        default='2000,10000,5000,3000', #'10000,7000,5000',
         help='How many training loops to run', )
     parser.add_argument(
         '--eval_step_interval',
@@ -430,18 +449,13 @@ if __name__ == '__main__':
     parser.add_argument(
         '--learning_rate',
         type=str,
-        default='0.001,0.0001,0.00001',  #'.00001,0.001,0.0001,0.00001',
+        default='.00001,0.001,0.0001,0.00001', #'0.001,0.0001,0.00001',
         help='How large a learning rate to use when training.')
     parser.add_argument(
         '--batch_size',
         type=int,
         default=512,
         help='How many items to train with at once', )
-    parser.add_argument(
-        '--summaries_dir',
-        type=str,
-        default='/tmp/retrain_logs',
-        help='Where to save summary logs for TensorBoard.')
     parser.add_argument(
         '--wanted_words',
         type=str,
@@ -450,9 +464,9 @@ if __name__ == '__main__':
                 #'bird,dog,cat,bed,house,tree,marvin,sheila,happy,wow',
         help='Words to use (others will be added to an unknown label)', )
     parser.add_argument(
-        '--train_dir',
+        '--output_dir',
         type=str,
-        default='/tmp/speech_commands_train',
+        default='/data/x/commands_out',
         help='Directory to write event logs and checkpoint.')
     parser.add_argument(
         '--save_step_interval',
@@ -465,7 +479,7 @@ if __name__ == '__main__':
         default='',
         help='If specified, restore this pretrained model before any training.')
     parser.add_argument(
-        '--model_architecture',
+        '--model',
         type=str,
         default='conv',
         help='What model architecture to use')

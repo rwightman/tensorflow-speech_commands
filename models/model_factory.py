@@ -22,14 +22,13 @@ from __future__ import print_function
 import math
 
 import tensorflow as tf
-slim = tf.contrib.slim
 
-from models.conv2 import conv2_args_scope, create_conv2_model
+from models.conv2d import create_conv2d_model
 from models.original import create_conv_model, create_low_latency_conv_model, \
     create_low_latency_svdf_model
 from models.vggish_slim import create_vggish_slim
 from models.nasnet.nasnet import create_nasnetm
-from models.resnet_v2 import create_resnet_v2_50
+from models.resnet_v2 import create_resnet_v2_50, create_resnet_v2_xx
 
 
 def prepare_model_settings(
@@ -114,14 +113,16 @@ def create_model(fingerprint_input, model_settings, model_architecture,
         return create_conv_model(
             fingerprint_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
-    elif model_architecture == 'conv2':
-        with slim.arg_scope(conv2_args_scope()):
-            model = create_conv2_model(
-                fingerprint_input, model_settings,
-                dropout_prob=dropout_prob, is_training=is_training)
-            return model
+    elif model_architecture == 'conv2d':
+        return create_conv2d_model(
+            fingerprint_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'vggish' or model_architecture == 'vggish_slim':
         return create_vggish_slim(
+            fingerprint_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'resnetxx':
+        return create_resnet_v2_xx(
             fingerprint_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'resnet50':

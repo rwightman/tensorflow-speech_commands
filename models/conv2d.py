@@ -11,12 +11,12 @@ import tensorflow as tf
 slim = tf.contrib.slim
 
 
-def conv2_args_scope(weight_decay=0.0001,
-                     batch_norm_decay=0.997,
-                     batch_norm_epsilon=1e-5,
-                     batch_norm_scale=True,
-                     activation_fn=tf.nn.elu,
-                     use_batch_norm=True):
+def conv2d_args_scope(weight_decay=0.0001,
+                      batch_norm_decay=0.997,
+                      batch_norm_epsilon=1e-5,
+                      batch_norm_scale=True,
+                      activation_fn=tf.nn.elu,
+                      use_batch_norm=True):
 
     batch_norm_params = {
         'decay': batch_norm_decay,
@@ -45,7 +45,7 @@ def conv2_args_scope(weight_decay=0.0001,
                     return arg_sc
 
 
-def create_conv2_model(
+def create_conv2d_model(
         fingerprint_input, model_settings, dropout_prob=1.0, is_training=True):
     """Convolutional model 2.
     """
@@ -54,21 +54,22 @@ def create_conv2_model(
     fingerprint_4d = tf.reshape(
         fingerprint_input, [-1, input_time_size, input_frequency_size, 1])
 
-    with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
-        net = slim.conv2d(fingerprint_4d, 64, (7, 21), padding='SAME')
-        net = slim.conv2d(net, 64, (5, 11), padding='SAME')
-        net = slim.max_pool2d(net, 2)
-        net = slim.conv2d(net, 128, (3, 7), padding='SAME')
-        net = slim.conv2d(net, 128, (3, 7), padding='SAME')
-        net = slim.max_pool2d(net, 2)
-        net = slim.conv2d(net, 256, (1, 3), padding='SAME')
-        net = slim.conv2d(net, 256, (1, 3), padding='SAME')
-        #net = slim.max_pool2d(net, 2)
-        net = tf.reduce_mean(net, [2])
-        print(net.shape)
-        net = slim.dropout(net, dropout_prob)
-        net = slim.flatten(net)
-        final_fc = slim.fully_connected(net, model_settings['label_count'])
-        print(final_fc.shape)
+    with slim.arg_scope(conv2d_args_scope()):
+        with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
+            net = slim.conv2d(fingerprint_4d, 64, (7, 21), padding='SAME')
+            net = slim.conv2d(net, 64, (5, 11), padding='SAME')
+            net = slim.max_pool2d(net, 2)
+            net = slim.conv2d(net, 128, (3, 7), padding='SAME')
+            net = slim.conv2d(net, 128, (3, 7), padding='SAME')
+            net = slim.max_pool2d(net, 2)
+            net = slim.conv2d(net, 256, (1, 3), padding='SAME')
+            net = slim.conv2d(net, 256, (1, 3), padding='SAME')
+            #net = slim.max_pool2d(net, 2)
+            net = tf.reduce_mean(net, [2])
+            print(net.shape)
+            net = slim.dropout(net, dropout_prob)
+            net = slim.flatten(net)
+            final_fc = slim.fully_connected(net, model_settings['label_count'])
+            print(final_fc.shape)
 
     return final_fc
