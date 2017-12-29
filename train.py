@@ -183,11 +183,11 @@ def main(_):
 
     # Define loss and optimizer
     cross_entropy_op = tf.losses.softmax_cross_entropy(
-        onehot_labels=ground_truth_input, logits=logits, label_smoothing=0.1)
+        onehot_labels=ground_truth_input, logits=logits, label_smoothing=0.05)
     if 'AuxLogits' in endpoints:
         tf.losses.softmax_cross_entropy(
             onehot_labels=ground_truth_input, logits=endpoints['AuxLogits'],
-            label_smoothing=0.1, weights=0.4, scope='aux_loss')
+            label_smoothing=0.05, weights=0.4, scope='aux_loss')
 
     for loss in tf.get_collection(tf.GraphKeys.LOSSES):
         tf.summary.scalar('losses/%s' % loss.op.name, loss)
@@ -299,9 +299,9 @@ def main(_):
             total_accuracy = 0
             total_conf_matrix = None
             for i in range(0, eval_set_size, FLAGS.batch_size):
-                validation_samples, validation_ground_truth = (
-                    audio_processor.get_data(FLAGS.batch_size, i, model_settings, 0.0,
-                                             0.0, 0, 'validation', sess))
+                validation_samples, validation_ground_truth = audio_processor.get_data(
+                    FLAGS.batch_size, i, model_settings, 0.0,
+                    0.0, 0, 'validation', sess)
 
                 # Run a validation step and capture training summaries for TensorBoard
                 # with the `merged` op.

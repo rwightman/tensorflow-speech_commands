@@ -23,7 +23,7 @@ import math
 
 import tensorflow as tf
 
-from models.conv1d import create_conv1d_model
+from models.conv1d import *
 from models.conv2d import create_conv2d_model
 from models.original import create_conv_model, create_low_latency_conv_model, \
     create_low_latency_svdf_model
@@ -130,8 +130,24 @@ def create_model(sample_input, model_settings, model_architecture,
         return create_conv_model(
             sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
-    elif model_architecture == 'conv1d':
-        return create_conv1d_model(
+    elif model_architecture == 'conv1d_lame':
+        return create_conv1d_lame_model(
+            sample_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'conv1d_a':
+        return create_conv1d_a_model(
+            sample_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'conv1d_b':
+        return create_conv1d_b_model(
+            sample_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'conv1d_c':
+        return create_conv1d_c_model(
+            sample_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'conv1d_d':
+        return create_conv1d_d_model(
             sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'conv2d':
