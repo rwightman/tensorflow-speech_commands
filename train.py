@@ -206,7 +206,7 @@ def main(_):
     train_step = slim.learning.create_train_op(
         total_loss,
         optimizer,
-        clip_gradient_norm=5.0,
+        clip_gradient_norm=10.0,
         check_numerics=FLAGS.check_nans)
 
     predicted_indices = tf.argmax(logits, 1)
@@ -383,7 +383,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--background_volume',
         type=float,
-        default=0.1,
+        default=0.2,
         help="""\
       How loud the background noise should be, between 0 and 1.
       """)
@@ -451,19 +451,19 @@ if __name__ == '__main__':
         default=40,
         help='How many bins to use for the MFCC fingerprint', )
     parser.add_argument(
-        '--how_many_training_steps',
-        type=str,
-        default='2000,10000,5000,3000', #'10000,7000,5000',
-        help='How many training loops to run', )
-    parser.add_argument(
         '--eval_step_interval',
         type=int,
         default=500,
         help='How often to evaluate the training results.')
     parser.add_argument(
+        '--how_many_training_steps',
+        type=str,
+        default='12000, 6000', #'2000,10000,5000,3000',
+        help='How many training loops to run', )
+    parser.add_argument(
         '--learning_rate',
         type=str,
-        default='.00001,0.001,0.0001,0.00001', #'0.001,0.0001,0.00001',
+        default='0.0001,0.00001', #'.00001,0.001,0.0001,0.00001',
         help='How large a learning rate to use when training.')
     parser.add_argument(
         '--batch_size',

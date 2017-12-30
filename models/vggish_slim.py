@@ -52,7 +52,7 @@ def create_vggish_slim(fingerprint_input, model_settings, dropout_prob=0.8, is_t
             [slim.fully_connected],
             weights_initializer=tf.truncated_normal_initializer(stddev=0.01),
             biases_initializer=tf.zeros_initializer(),
-            activation_fn=tf.nn.relu),\
+            activation_fn=tf.nn.elu),\
                 slim.arg_scope(
                     [slim.dropout],
                     is_training=is_training):

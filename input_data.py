@@ -448,8 +448,12 @@ class AudioProcessor(object):
                 background_clipped = background_samples[background_offset:(
                     background_offset + desired_samples)]
                 background_reshaped = background_clipped.reshape([desired_samples, 1])
+
                 if np.random.uniform(0, 1) < background_frequency:
-                    background_volume = np.random.uniform(0, background_volume_range)
+                    if sample['label'] == SILENCE_LABEL:
+                        background_volume = np.random.uniform(0, 0.5)
+                    else:
+                        background_volume = np.random.uniform(0, background_volume_range)
                 else:
                     background_volume = 0
             else:
@@ -462,7 +466,8 @@ class AudioProcessor(object):
             if sample['label'] == SILENCE_LABEL:
                 input_dict[self.foreground_volume_placeholder_] = 0
             else:
-                input_dict[self.foreground_volume_placeholder_] = 1
+                input_dict[self.foreground_volume_placeholder_] =\
+                    np.random.uniform(0.5, 1.0)
 
             # Run the graph to produce the output audio.
             data[i - offset, :] = sess.run(
