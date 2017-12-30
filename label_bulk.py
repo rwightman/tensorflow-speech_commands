@@ -68,7 +68,7 @@ def find_inputs(
     return filenames
 
 
-def _load_fingerprint(
+def _load_sample(
         wav_filename,
         model_settings):
     """Creates an audio model with the nodes needed for inference.
@@ -84,7 +84,7 @@ def _load_fingerprint(
       window_size_ms: Time slice duration to estimate frequencies from.
       window_stride_ms: How far apart time slices should be.
       dct_coefficient_count: Number of frequency bands to analyze.
-      model_architecture: Name of the kind of model to generate.
+      model: Name of the kind of model to generate.
     """
     wav_loader = io_ops.read_file(wav_filename)
 
@@ -94,32 +94,39 @@ def _load_fingerprint(
         desired_samples=model_settings['desired_samples'],
         name='decoded_sample_data')
 
-    spectrogram = contrib_audio.audio_spectrogram(
-        decoded_sample_data.audio,
-        window_size=model_settings['window_size_samples'],
-        stride=model_settings['window_stride_samples'],
-        magnitude_squared=True)
+    if model_settings['input_format'] == 'raw':
+        print(decoded_sample_data.audio.shape)
+        reshaped_input = tf.reshape(decoded_sample_data.audio, [
+            -1, model_settings['desired_samples']
+        ])
+        print(reshaped_input.shape)
+    else:
+        spectrogram = contrib_audio.audio_spectrogram(
+            decoded_sample_data.audio,
+            window_size=model_settings['window_size_samples'],
+            stride=model_settings['window_stride_samples'],
+            magnitude_squared=True)
 
-    fingerprint_input = contrib_audio.mfcc(
-        spectrogram,
-        decoded_sample_data.sample_rate,
-        lower_frequency_limit=model_settings['lower_frequency_limit'],
-        upper_frequency_limit=model_settings['upper_frequency_limit'],
-        filterbank_channel_count=model_settings['filterbank_channel_count'],
-        dct_coefficient_count=model_settings['dct_coefficient_count'])
-    fingerprint_frequency_size = model_settings['dct_coefficient_count']
-    fingerprint_time_size = model_settings['spectrogram_length']
+        fingerprint_input = contrib_audio.mfcc(
+            spectrogram,
+            decoded_sample_data.sample_rate,
+            lower_frequency_limit=model_settings['lower_frequency_limit'],
+            upper_frequency_limit=model_settings['upper_frequency_limit'],
+            filterbank_channel_count=model_settings['filterbank_channel_count'],
+            dct_coefficient_count=model_settings['dct_coefficient_count'])
+        fingerprint_frequency_size = model_settings['dct_coefficient_count']
+        fingerprint_time_size = model_settings['spectrogram_length']
 
-    reshaped_input = tf.reshape(fingerprint_input, [
-        -1, fingerprint_time_size * fingerprint_frequency_size
-    ])
+        reshaped_input = tf.reshape(fingerprint_input, [
+            -1, fingerprint_time_size * fingerprint_frequency_size
+        ])
 
     return reshaped_input
 
 
 def get_inputs(folder, model_settings, batch_size=256, num_threads=1):
     def _parse_data(filename):
-        fingerprint = _load_fingerprint(filename, model_settings)
+        fingerprint = _load_sample(filename, model_settings)
         return fingerprint
 
     filenames = find_inputs(folder)
@@ -138,6 +145,40 @@ def load_labels(filename):
     return [line.strip().replace('_', '') for line in tf.gfile.GFile(filename)]
 
 
+def _prepare_model_settings(num_words):
+    if any(n in FLAGS.model for n in ['conv1d']):
+        model_settings = prepare_model_settings(
+            num_words,
+            FLAGS.sample_rate,
+            FLAGS.clip_duration_ms,
+            input_format='raw')
+    elif any(n in FLAGS.model for n in ['vggish', 'nasnet', 'resnet']):
+        model_settings = prepare_model_settings(
+            num_words,
+            FLAGS.sample_rate,
+            FLAGS.clip_duration_ms,
+            input_format='spectrogram',
+            window_size_ms=FLAGS.window_size_ms,
+            window_stride_ms=FLAGS.window_stride_ms,
+            lower_frequency_limit=125,
+            upper_frequency_limit=7500,
+            filterbank_channel_count=64,
+            dct_coefficient_count=64)
+    else:
+        model_settings = prepare_model_settings(
+            num_words,
+            FLAGS.sample_rate,
+            FLAGS.clip_duration_ms,
+            input_format='spectrogram',
+            window_size_ms=FLAGS.window_size_ms,
+            window_stride_ms=FLAGS.window_stride_ms,
+            lower_frequency_limit=20,
+            upper_frequency_limit=4000,
+            filterbank_channel_count=FLAGS.dct_coefficient_count,
+            dct_coefficient_count=FLAGS.dct_coefficient_count)
+    return model_settings
+
+
 def main(_):
     """Loads the model and labels, and runs the inference to print predictions."""
     if not FLAGS.wav or not tf.gfile.Exists(FLAGS.wav):
@@ -147,26 +188,9 @@ def main(_):
         tf.logging.fatal('Labels file does not exist %s', FLAGS.labels)
 
     labels_list = load_labels(FLAGS.labels)
-
-    if any(n in FLAGS.model_architecture for n in ['vggish', 'nasnet', 'resnet']):
-        lower_frequency_limit = 125
-        upper_frequency_limit = 7500
-        filterbank_channel_count = dct_coefficient_count = 64
-    else:
-        lower_frequency_limit = 20
-        upper_frequency_limit = 4000
-        filterbank_channel_count = dct_coefficient_count = FLAGS.dct_coefficient_count
-
     words_list = input_data.prepare_words_list(FLAGS.wanted_words.split(','))
-    model_settings = prepare_model_settings(
-        len(words_list), FLAGS.sample_rate, FLAGS.clip_duration_ms,
-        FLAGS.window_size_ms, FLAGS.window_stride_ms,
-        lower_frequency_limit=lower_frequency_limit,
-        upper_frequency_limit=upper_frequency_limit,
-        filterbank_channel_count=filterbank_channel_count,
-        dct_coefficient_count=dct_coefficient_count)
+    model_settings = _prepare_model_settings(len(words_list))
     runtime_settings = {'clip_stride_ms': FLAGS.clip_stride_ms}
-
     print('Model settings:')
     for k, v in model_settings.items():
         print(k, v)
@@ -179,7 +203,7 @@ def main(_):
     inputs = iterator.get_next()
 
     net = create_model(
-        inputs, model_settings, FLAGS.model_architecture,
+        inputs, model_settings, FLAGS.model,
         runtime_settings=runtime_settings)
     if isinstance(net, tuple):
         logits, endpoints = net
@@ -275,7 +299,7 @@ if __name__ == '__main__':
         default='',
         help='If specified, restore this pretrained model before any training.')
     parser.add_argument(
-        '--model_architecture',
+        '--model',
         type=str,
         default='conv',
         help='What model architecture to use')
