@@ -440,7 +440,7 @@ class AudioProcessor(object):
             }
 
             # Choose a section of background noise to mix in.
-            if use_background:
+            if use_background and np.random.uniform(0, 1) < background_frequency:
                 background_index = np.random.randint(len(self.background_data))
                 background_samples = self.background_data[background_index]
                 background_offset = np.random.randint(
@@ -448,14 +448,10 @@ class AudioProcessor(object):
                 background_clipped = background_samples[background_offset:(
                     background_offset + desired_samples)]
                 background_reshaped = background_clipped.reshape([desired_samples, 1])
-
-                if np.random.uniform(0, 1) < background_frequency:
-                    if sample['label'] == SILENCE_LABEL:
-                        background_volume = np.random.uniform(0, 0.5)
-                    else:
-                        background_volume = np.random.uniform(0, background_volume_range)
+                if sample['label'] == SILENCE_LABEL:
+                    background_volume = np.random.uniform(0, 0.3)
                 else:
-                    background_volume = 0
+                    background_volume = np.random.uniform(0, background_volume_range)
             else:
                 background_reshaped = np.zeros([desired_samples, 1])
                 background_volume = 0
@@ -467,7 +463,7 @@ class AudioProcessor(object):
                 input_dict[self.foreground_volume_placeholder_] = 0
             else:
                 input_dict[self.foreground_volume_placeholder_] =\
-                    np.random.uniform(0.5, 1.0)
+                    np.random.uniform(0.8, 1.0)
 
             # Run the graph to produce the output audio.
             data[i - offset, :] = sess.run(

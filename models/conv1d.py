@@ -104,7 +104,7 @@ def create_conv1d_a_model(
 
     with slim.arg_scope(conv1d_args_scope()):
         with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
-            net = slim.convolution(input_3d, 64, 5)
+            net = slim.convolution(input_3d, 64, 3, stride=2)
             net = slim.convolution(net, 64, 3)
             print(net.shape)
             net = slim.pool(net, 3, 'MAX', stride=2)
@@ -144,7 +144,7 @@ def create_conv1d_b_model(
 
     with slim.arg_scope(conv1d_args_scope()):
         with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
-            net = slim.convolution(input_3d, 32, 5, stride=2)
+            net = slim.convolution(input_3d, 32, 3, stride=2)
             net = slim.convolution(net, 32, 3)
             print(net.shape)
             net = slim.pool(net, 3, 'MAX', stride=2)
@@ -189,7 +189,7 @@ def create_conv1d_c_model(
 
     with slim.arg_scope(conv1d_args_scope()):
         with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
-            net = slim.convolution(input_3d, 64, 5, stride=2, padding='SAME')
+            net = slim.convolution(input_3d, 64, 3, stride=2, padding='SAME')
             net = slim.convolution(net, 64, 3, padding='SAME')
             print(net.shape)
             net = slim.pool(net, 3, 'MAX', stride=2)
@@ -233,26 +233,52 @@ def create_conv1d_d_model(
 
     with slim.arg_scope(conv1d_args_scope()):
         with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
-            net = slim.convolution(input_3d, 64, 5, stride=2)
+            net = slim.convolution(input_3d, 64, 3, stride=2)
             net = slim.convolution(net, 128, 3, stride=2)
+            net = slim.pool(net, 3, 'MAX', stride=2)
             print(net.shape)
-            net = slim.convolution(net, 256, 3, rate=2)
-            net = slim.convolution(net, 256, 3, rate=4)
-            net = slim.convolution(net, 256, 3, rate=8)
-            net = slim.convolution(net, 256, 3, rate=16)
-            net = slim.convolution(net, 256, 3, rate=32)
-            net = slim.convolution(net, 256, 3, rate=64)
-            net = slim.convolution(net, 256, 3, rate=128)
-            net = slim.convolution(net, 256, 3, rate=256)
-            net = slim.convolution(net, 256, 3, rate=512)
-            net = slim.convolution(net, 256, 3, rate=1024)
+
+            dilated = []
+            net = slim.convolution(net, 256, 3, rate=1)
+            dilated.append(slim.convolution(net, 256, 1, activation_fn=None))
+
+            def _layer(x, rate):
+                shortcut = tf.identity(x)
+                x = slim.convolution(x, 256, 3, rate=rate)
+                dilated.append(slim.convolution(x, 256, 1, activation_fn=None))
+                x = x + shortcut
+                return x
+
+            net = _layer(net, rate=2)
+            net = _layer(net, rate=4)
+            net = _layer(net, rate=8)
+            net = _layer(net, rate=16)
+            net = _layer(net, rate=32)
+            net = _layer(net, rate=64)
+            net = _layer(net, rate=128)
+            net = _layer(net, rate=256)
+            net = _layer(net, rate=512)
+            print(net.shape, len(dilated))
+
+            net = sum(dilated)
+            #net = net[:, :, net.shape[2]//2]
+            net = slim.convolution(net[:,:,250:], 512, 1, stride=250)
+            #net = slim.pool(net, 1, 'MAX', stride=250)
+            net = tf.nn.elu(net)
             print(net.shape)
+
+            #net = slim.convolution(net, 1024, 1, stride=2)
+            #print('1x1', net.shape)
+
             net_global_avg = tf.reduce_mean(net, [2])
             net_global_max = tf.reduce_max(net, [2])
             net = 0.5 * (net_global_avg + net_global_max)
             net = slim.flatten(net)
+            print(net.shape)
+
             net = slim.fully_connected(net, 1024)
             print('fc1', net.shape)
+
             net = slim.dropout(net, dropout_prob)
             final_fc = slim.fully_connected(net, model_settings['label_count'])
             print('final', final_fc.shape)

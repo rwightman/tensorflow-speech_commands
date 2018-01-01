@@ -86,14 +86,7 @@ from tensorflow.python.platform import gfile
 FLAGS = None
 
 
-def main(_):
-    # We want to see all the logging messages for this tutorial.
-    tf.logging.set_verbosity(tf.logging.INFO)
-
-    # Start a new TensorFlow session.
-    sess = tf.InteractiveSession()
-
-    num_words = len(input_data.prepare_words_list(FLAGS.wanted_words.split(',')))
+def _prepare_model_settings(num_words):
     if any(n in FLAGS.model for n in ['conv1d']):
         model_settings = prepare_model_settings(
             num_words,
@@ -124,7 +117,18 @@ def main(_):
             upper_frequency_limit=4000,
             filterbank_channel_count=FLAGS.dct_coefficient_count,
             dct_coefficient_count=FLAGS.dct_coefficient_count)
+    return model_settings
 
+
+def main(_):
+    # We want to see all the logging messages for this tutorial.
+    tf.logging.set_verbosity(tf.logging.INFO)
+
+    # Start a new TensorFlow session.
+    sess = tf.InteractiveSession()
+
+    model_settings = _prepare_model_settings(
+        len(input_data.prepare_words_list(FLAGS.wanted_words.split(','))))
     print('Model settings:')
     for k, v in model_settings.items():
         print(k, v)
@@ -390,14 +394,14 @@ if __name__ == '__main__':
     parser.add_argument(
         '--background_frequency',
         type=float,
-        default=0.8,
+        default=0.7,
         help="""\
       How many of the training samples have background noise mixed in.
       """)
     parser.add_argument(
         '--silence_percentage',
         type=float,
-        default=10.0,
+        default=9.0,
         help="""\
       How much of the training data should be silence.
       """)
@@ -411,7 +415,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--time_shift_ms',
         type=float,
-        default=100.0,
+        default=300.0,
         help="""\
       Range to randomly shift the training audio by in time.
       """)
@@ -458,7 +462,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--how_many_training_steps',
         type=str,
-        default='12000, 6000', #'2000,10000,5000,3000',
+        default='30000,5000', #'2000,10000,5000,3000',
         help='How many training loops to run', )
     parser.add_argument(
         '--learning_rate',

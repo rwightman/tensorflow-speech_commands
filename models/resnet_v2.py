@@ -112,7 +112,7 @@ def resnet_v2(inputs,
               blocks,
               num_classes=None,
               is_training=True,
-              global_pool=True,
+              global_pool='avg',
               output_stride=None,
               include_root_block=True,
               spatial_squeeze=True,
@@ -209,12 +209,18 @@ def resnet_v2(inputs,
             end_points_collection)
         print(net.shape)
         if global_pool:
-          # Global average pooling.
-          net = tf.reduce_mean(net, [1, 2], name='pool5', keep_dims=True)
+          if global_pool == 'avgmax':
+            net_avg = tf.reduce_mean(net, [1, 2], name='pool5_avg', keep_dims=True)
+            net_max = tf.reduce_max(net, [1, 2], name='pool5_max', keep_dims=True)
+            net = 0.5 * (net_avg + net_max)
+          else:
+            # Global average pooling.
+            net = tf.reduce_mean(net, [1, 2], name='pool5', keep_dims=True)
           end_points['global_pool'] = net
         if num_classes is not None:
-          net = slim.conv2d(net, num_classes, [1, 1], activation_fn=None,
-                            normalizer_fn=None, scope='logits')
+          net = slim.conv2d(
+            net, num_classes, [1, 1], activation_fn=None,
+            normalizer_fn=None, scope='logits')
           end_points[sc.name + '/logits'] = net
           if spatial_squeeze:
             net = tf.squeeze(net, [1, 2], name='SpatialSqueeze')
@@ -252,7 +258,7 @@ resnet_v2.default_image_size = 224
 def resnet_v2_50(inputs,
                  num_classes=None,
                  is_training=True,
-                 global_pool=True,
+                 global_pool='avg',
                  output_stride=None,
                  spatial_squeeze=True,
                  reuse=None,
@@ -275,8 +281,8 @@ def create_resnet_v2_xx(
         model_settings,
         dropout_prob=0.7,
         is_training=True,
-        global_pool=True,
-        output_stride=16,
+        global_pool='avgmax',
+        output_stride=32,
         scope='resnet_v2_xx'):
 
   input_frequency_size = model_settings['dct_coefficient_count']
