@@ -139,7 +139,7 @@ def main(_):
         FLAGS.unknown_percentage,
         FLAGS.wanted_words.split(','),
         FLAGS.validation_percentage,
-        FLAGS.testing_percentage, model_settings)
+        FLAGS.testing_percentage, model_settings, use_rosa=True)
     sample_size = model_settings['sample_size']
     label_count = model_settings['label_count']
     time_shift_samples = int((FLAGS.time_shift_ms * FLAGS.sample_rate) / 1000)
@@ -269,8 +269,16 @@ def main(_):
 
         # Pull the audio samples we'll use for training.
         train_samples, train_ground_truth = audio_processor.get_data(
-            FLAGS.batch_size, 0, model_settings, FLAGS.background_frequency,
-            FLAGS.background_volume, time_shift_samples, 'training', sess)
+            sess,
+            FLAGS.batch_size, 0, model_settings,
+            FLAGS.background_frequency,
+            FLAGS.background_volume,
+            pitch_shift_frequency=0.5,
+            pitch_shift=2.0,
+            time_stretch_frequency=0.5,
+            time_stretch=0.2,
+            time_shift=time_shift_samples,
+            mode='training')
 
         # Run the graph with this batch of training data.
         ops = {
@@ -304,8 +312,9 @@ def main(_):
             total_conf_matrix = None
             for i in range(0, eval_set_size, FLAGS.batch_size):
                 validation_samples, validation_ground_truth = audio_processor.get_data(
-                    FLAGS.batch_size, i, model_settings, 0.0,
-                    0.0, 0, 'validation', sess)
+                    sess,
+                    FLAGS.batch_size, i, model_settings,
+                    mode='validation')
 
                 # Run a validation step and capture training summaries for TensorBoard
                 # with the `merged` op.
@@ -462,12 +471,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--how_many_training_steps',
         type=str,
-        default='30000,5000', #'2000,10000,5000,3000',
+        default='1000,10000,5000,2000', #'30000,5000'
         help='How many training loops to run', )
     parser.add_argument(
         '--learning_rate',
         type=str,
-        default='0.0001,0.00001', #'.00001,0.001,0.0001,0.00001',
+        default='.0001,0.001,0.0001,0.00001', #'0.0001,0.00001',
         help='How large a learning rate to use when training.')
     parser.add_argument(
         '--batch_size',

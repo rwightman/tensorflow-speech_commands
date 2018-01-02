@@ -29,6 +29,7 @@ import tarfile
 
 import numpy as np
 import tensorflow as tf
+import librosa as lr
 
 from tensorflow.contrib.framework.python.ops import audio_ops as contrib_audio
 from tensorflow.python.ops import io_ops
@@ -152,8 +153,9 @@ class AudioProcessor(object):
 
     def __init__(self, data_dir, silence_percentage, unknown_percentage,
                  wanted_words, validation_percentage, testing_percentage,
-                 model_settings):
+                 model_settings, use_rosa=False):
         self.data_dir = data_dir
+        self.use_rosa = use_rosa
         # self.maybe_download_and_extract_dataset(data_url, data_dir)
         self.prepare_data_index_(
             silence_percentage, unknown_percentage, wanted_words,
@@ -311,27 +313,39 @@ class AudioProcessor(object):
           model_settings: Information about the current model being trained.
         """
         desired_samples = model_settings['desired_samples']
-        self.wav_filename_placeholder_ = tf.placeholder(tf.string, [])
-        wav_loader = io_ops.read_file(self.wav_filename_placeholder_)
-        wav_decoder = contrib_audio.decode_wav(
-            wav_loader, desired_channels=1, desired_samples=desired_samples)
+
+        if self.use_rosa:
+            self.wav_audio_placeholder_ = tf.placeholder(tf.float32, [desired_samples, 1])
+            self.wav_sample_rate_placeholder_ = tf.placeholder(tf.int32, [])
+            wav_audio = self.wav_audio_placeholder_
+            sample_rate = self.wav_sample_rate_placeholder_
+        else:
+            self.wav_filename_placeholder_ = tf.placeholder(tf.string, [])
+            wav_loader = io_ops.read_file(self.wav_filename_placeholder_)
+            wav_decoder = contrib_audio.decode_wav(
+                wav_loader, desired_channels=1, desired_samples=desired_samples)
+            wav_audio = wav_decoder.audio
+            sample_rate = wav_decoder.sample_rate
 
         # Allow the audio sample's volume to be adjusted.
         self.foreground_volume_placeholder_ = tf.placeholder(tf.float32, [])
         scaled_foreground = tf.multiply(
-            wav_decoder.audio, self.foreground_volume_placeholder_)
+            wav_audio, self.foreground_volume_placeholder_)
 
-        # Shift the sample's start position, and pad any gaps with zeros.
-        self.time_shift_padding_placeholder_ = tf.placeholder(tf.int32, [2, 2])
-        self.time_shift_offset_placeholder_ = tf.placeholder(tf.int32, [2])
-        padded_foreground = tf.pad(
-            scaled_foreground,
-            self.time_shift_padding_placeholder_,
-            mode='CONSTANT')
-        sliced_foreground = tf.slice(
-            padded_foreground,
-            self.time_shift_offset_placeholder_,
-            [desired_samples, -1])
+        if self.use_rosa:
+            sliced_foreground = scaled_foreground
+        else:
+            # Shift the sample's start position, and pad any gaps with zeros.
+            self.time_shift_padding_placeholder_ = tf.placeholder(tf.int32, [2, 2])
+            self.time_shift_offset_placeholder_ = tf.placeholder(tf.int32, [2])
+            padded_foreground = tf.pad(
+                scaled_foreground,
+                self.time_shift_padding_placeholder_,
+                mode='CONSTANT')
+            sliced_foreground = tf.slice(
+                padded_foreground,
+                self.time_shift_offset_placeholder_,
+                [desired_samples, -1])
 
         # Mix in background noise.
         self.background_data_placeholder_ = tf.placeholder(
@@ -356,7 +370,7 @@ class AudioProcessor(object):
 
             self.processed_input_ = contrib_audio.mfcc(
                 spectrogram,
-                wav_decoder.sample_rate,
+                sample_rate,
                 lower_frequency_limit=model_settings['lower_frequency_limit'],
                 upper_frequency_limit=model_settings['upper_frequency_limit'],
                 filterbank_channel_count=model_settings['filterbank_channel_count'],
@@ -373,8 +387,17 @@ class AudioProcessor(object):
         """
         return len(self.data_index[mode])
 
-    def get_data(self, how_many, offset, model_settings, background_frequency,
-                 background_volume_range, time_shift, mode, sess):
+    def get_data(self,
+                 sess,
+                 how_many, offset, model_settings,
+                 background_frequency=0.0,
+                 background_volume_range=0.0,
+                 pitch_shift_frequency=0.0,
+                 pitch_shift=0.0,
+                 time_stretch_frequency=0.0,
+                 time_stretch=0.0,
+                 time_shift=0,
+                 mode='training'):
         """Gather samples from the data set, applying transformations as needed.
 
         When the mode is 'training', a random selection of samples will be returned,
@@ -422,22 +445,75 @@ class AudioProcessor(object):
                 sample_index = np.random.randint(len(candidates))
             sample = candidates[sample_index]
 
-            # If we're time shifting, set up the offset for this sample.
-            if time_shift > 0:
-                time_shift_amount = np.random.randint(-time_shift, time_shift)
+            if self.use_rosa:
+                sample_audio, sample_rate = lr.load(sample['file'], sr=model_settings['sample_rate'])
+
+                if pitch_shift > 0 and np.random.uniform(0, 1) < pitch_shift_frequency:
+                    pitch_shift_amount = np.random.uniform(-pitch_shift, pitch_shift)
+                else:
+                    pitch_shift_amount = 0
+                #print('pitch shift: ', pitch_shift_amount)
+                if pitch_shift_amount != 0:
+                    sample_audio = lr.effects.pitch_shift(sample_audio, sample_rate, pitch_shift_amount)
+                    time_stretch_amount = 1.0
+                elif time_stretch > 0 and np.random.uniform(0, 1) < time_stretch_frequency:
+                    time_stretch_amount = np.random.uniform(1.0 - time_stretch, 1.0 + time_stretch)
+                else:
+                    time_stretch_amount = 1.0
+                #print('time stretch: ', time_stretch_amount)
+                if time_stretch_amount != 1.0:
+                    sample_audio = lr.effects.time_stretch(sample_audio, time_stretch_amount)
+
+                actual_samples = sample_audio.shape[0]
+                # If we're time shifting, set up the offset for this sample.
+                if time_shift > 0:
+                    time_shift_amount = np.random.randint(-time_shift, time_shift)
+                else:
+                    time_shift_amount = 0
+                #print('time shift: ', time_shift_amount)
+                if time_shift_amount < 0:
+                    crop_l = -time_shift_amount
+                    pad_l = 0
+                else:
+                    crop_l = 0
+                    pad_l = time_shift_amount
+                crop_r = min(actual_samples, desired_samples + crop_l - pad_l)
+                pad_r = max(0, desired_samples - (crop_r - crop_l + pad_l))
+                #print('cl, cr, pl, pr:', crop_l, crop_r, pad_l, pad_r)
+
+                sample_audio = sample_audio[crop_l:crop_r]
+                if pad_l and pad_r:
+                    sample_audio = np.r_[np.random.uniform(-0.01, 0.01, pad_l),
+                                         sample_audio,
+                                         np.random.uniform(-0.01, 0.01, pad_r)]
+                elif pad_l:
+                    sample_audio = np.r_[np.random.uniform(-0.01, 0.01, pad_l), sample_audio]
+                elif pad_r:
+                    sample_audio = np.r_[sample_audio, np.random.uniform(-0.01, 0.01, pad_r)]
+
+                #print(sample_audio.shape)
+
+                input_dict = {
+                    self.wav_audio_placeholder_: np.expand_dims(sample_audio, axis=1),
+                    self.wav_sample_rate_placeholder_: sample_rate,
+                }
             else:
-                time_shift_amount = 0
-            if time_shift_amount > 0:
-                time_shift_padding = [[time_shift_amount, 0], [0, 0]]
-                time_shift_offset = [0, 0]
-            else:
-                time_shift_padding = [[0, -time_shift_amount], [0, 0]]
-                time_shift_offset = [-time_shift_amount, 0]
-            input_dict = {
-                self.wav_filename_placeholder_: sample['file'],
-                self.time_shift_padding_placeholder_: time_shift_padding,
-                self.time_shift_offset_placeholder_: time_shift_offset,
-            }
+                # If we're time shifting, set up the offset for this sample.
+                if time_shift > 0:
+                    time_shift_amount = np.random.randint(-time_shift, time_shift)
+                else:
+                    time_shift_amount = 0
+                if time_shift_amount > 0:
+                    time_shift_padding = [[time_shift_amount, 0], [0, 0]]
+                    time_shift_offset = [0, 0]
+                else:
+                    time_shift_padding = [[0, -time_shift_amount], [0, 0]]
+                    time_shift_offset = [-time_shift_amount, 0]
+                input_dict = {
+                    self.wav_filename_placeholder_: sample['file'],
+                    self.time_shift_padding_placeholder_: time_shift_padding,
+                    self.time_shift_offset_placeholder_: time_shift_offset,
+                }
 
             # Choose a section of background noise to mix in.
             if use_background and np.random.uniform(0, 1) < background_frequency:
