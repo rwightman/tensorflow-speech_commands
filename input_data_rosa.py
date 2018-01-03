@@ -25,10 +25,16 @@ import os.path
 import random
 import re
 import sys
-import tarfile
+import multiprocessing as mp
+try:
+    mp.set_start_method('spawn')
+except RuntimeError:
+    pass
 
 import numpy as np
 import tensorflow as tf
+import librosa as lr
+import scipy.io.wavfile as wf
 
 from tensorflow.contrib.framework.python.ops import audio_ops as contrib_audio
 from tensorflow.python.ops import io_ops
@@ -105,65 +111,98 @@ def which_set(filename, validation_percentage, testing_percentage):
     return result
 
 
-def load_wav_file(filename):
-    """Loads an audio file and returns a float PCM-encoded array of samples.
+def spectrogram_graph(input, sample_rate, model_settings):
+    assert model_settings['input_format'] == 'spectrogram'
+    # Run the spectrogram and MFCC ops to get a 2D 'fingerprint' of the audio.
+    spectrogram = contrib_audio.audio_spectrogram(
+        input,
+        window_size=model_settings['window_size_samples'],
+        stride=model_settings['window_stride_samples'],
+        magnitude_squared=True)
 
-    Args:
-      filename: Path to the .wav file to load.
+    processed_input = contrib_audio.mfcc(
+        spectrogram,
+        sample_rate,
+        lower_frequency_limit=model_settings['lower_frequency_limit'],
+        upper_frequency_limit=model_settings['upper_frequency_limit'],
+        filterbank_channel_count=model_settings['filterbank_channel_count'],
+        dct_coefficient_count=model_settings['dct_coefficient_count'])
 
-    Returns:
-      Numpy array holding the sample data as floats between -1.0 and 1.0.
-    """
-    with tf.Session(graph=tf.Graph()) as sess:
-        wav_filename_placeholder = tf.placeholder(tf.string, [])
-        wav_loader = io_ops.read_file(wav_filename_placeholder)
-        wav_decoder = contrib_audio.decode_wav(wav_loader, desired_channels=1)
-        return sess.run(
-            wav_decoder,
-            feed_dict={wav_filename_placeholder: filename}).audio.flatten()
-
-
-def save_wav_file(filename, wav_data, sample_rate):
-    """Saves audio sample data to a .wav audio file.
-
-    Args:
-      filename: Path to save the file to.
-      wav_data: 2D array of float PCM-encoded audio data.
-      sample_rate: Samples per second to encode in the file.
-    """
-    with tf.Session(graph=tf.Graph()) as sess:
-        wav_filename_placeholder = tf.placeholder(tf.string, [])
-        sample_rate_placeholder = tf.placeholder(tf.int32, [])
-        wav_data_placeholder = tf.placeholder(tf.float32, [None, 1])
-        wav_encoder = contrib_audio.encode_wav(
-            wav_data_placeholder, sample_rate_placeholder)
-        wav_saver = io_ops.write_file(wav_filename_placeholder, wav_encoder)
-        sess.run(
-            wav_saver,
-            feed_dict={
-                wav_filename_placeholder: filename,
-                sample_rate_placeholder: sample_rate,
-                wav_data_placeholder: np.reshape(wav_data, (-1, 1))
-            })
+    return processed_input
 
 
-class AudioProcessor(object):
+def spectorgram_graph2(input, sample_rate, model_settings):
+    # A batch of float32 time-domain signals in the range [-1, 1] with shape
+    # [batch_size, signal_length]. Both batch_size and signal_length may be unknown.
+    #signals = tf.placeholder(tf.float32, [None, None])
+
+    # `stfts` is a complex64 Tensor representing the Short-time Fourier Transform of
+    # each signal in `signals`. Its shape is [batch_size, ?, fft_unique_bins]
+    # where fft_unique_bins = fft_length // 2 + 1 = 513.
+    stfts = tf.contrib.signal.stft(
+        input,
+        frame_length=model_settings['window_size_samples'],
+        frame_step=model_settings['window_stride_samples'],
+        fft_length=1024)
+
+    # A power spectrogram is the squared magnitude of the complex-valued STFT.
+    # A float32 Tensor of shape [batch_size, ?, 513].
+    # power_spectrograms = tf.real(stfts * tf.conj(stfts))
+
+    # An energy spectrogram is the magnitude of the complex-valued STFT.
+    # A float32 Tensor of shape [batch_size, ?, 513].
+    magnitude_spectrograms = tf.abs(stfts)
+
+    # Warp the linear-scale, magnitude spectrograms into the mel-scale.
+    num_spectrogram_bins = magnitude_spectrograms.shape[-1].value
+    lower_edge_hertz = model_settings['lower_frequency_limit']
+    upper_edge_hertz = model_settings['upper_frequency_limit']
+    num_mel_bins = 64
+    linear_to_mel_weight_matrix = tf.contrib.signal.linear_to_mel_weight_matrix(
+        num_mel_bins, num_spectrogram_bins, sample_rate,
+        lower_edge_hertz, upper_edge_hertz)
+    print(magnitude_spectrograms.shape, linear_to_mel_weight_matrix.shape)
+
+    # mel_spectrograms = tf.tensordot(
+    #     magnitude_spectrograms, linear_to_mel_weight_matrix, 1)
+    # Note: Shape inference for `tf.tensordot` does not currently handle this case.
+    # mel_spectrograms.set_shape(
+    #     magnitude_spectrograms.shape[:-1].concatenate(linear_to_mel_weight_matrix.shape[-1:]))
+    # print(mel_spectrograms.shape)
+
+    mel_spectrograms = tf.matmul(
+        tf.reshape(magnitude_spectrograms, [-1, magnitude_spectrograms.shape[-1]]),
+        linear_to_mel_weight_matrix)
+    mel_spectrograms = tf.reshape(
+        mel_spectrograms,
+        [-1, magnitude_spectrograms.shape[1], linear_to_mel_weight_matrix.shape[-1]])
+    print(mel_spectrograms.shape)
+
+    log_mel_spectrograms = tf.log(mel_spectrograms + 1e6)
+
+    # Keep the first `num_mfccs` MFCCs.
+    mfccs = tf.contrib.signal.mfccs_from_log_mel_spectrograms(log_mel_spectrograms)
+    print(mfccs.shape)
+
+    return mfccs
+
+
+class AudioProcessorRosa(object):
     """Handles loading, partitioning, and preparing audio training data."""
 
     def __init__(self, data_dir, silence_percentage, unknown_percentage,
                  wanted_words, validation_percentage, testing_percentage,
                  model_settings):
         self.data_dir = data_dir
-        # self.maybe_download_and_extract_dataset(data_url, data_dir)
         self.prepare_data_index_(
             silence_percentage, unknown_percentage, wanted_words,
             validation_percentage, testing_percentage)
         self.prepare_background_data_()
-        self.prepare_processing_graph_(model_settings)
 
-    def prepare_data_index_(self, silence_percentage, unknown_percentage,
-                            wanted_words, validation_percentage,
-                            testing_percentage):
+    def prepare_data_index_(
+            self, silence_percentage, unknown_percentage,
+            wanted_words, validation_percentage,
+            testing_percentage):
         """Prepares a list of the samples organized by set and label.
 
         The training loop needs a list of all the available data, organized by
@@ -275,95 +314,13 @@ class AudioProcessor(object):
         if not os.path.exists(background_dir):
             return self.background_data
 
-        with tf.Session(graph=tf.Graph()) as sess:
-            wav_filename_placeholder = tf.placeholder(tf.string, [])
-            wav_loader = io_ops.read_file(wav_filename_placeholder)
-            wav_decoder = contrib_audio.decode_wav(wav_loader, desired_channels=1)
-            search_path = os.path.join(
-                self.data_dir, BACKGROUND_NOISE_DIR_NAME, '*.wav')
-            for wav_path in gfile.Glob(search_path):
-                wav_data = sess.run(
-                    wav_decoder,
-                    feed_dict={wav_filename_placeholder: wav_path}).audio.flatten()
-                self.background_data.append(wav_data)
-            if not self.background_data:
-                raise Exception('No background wav files were found in ' + search_path)
-
-    def prepare_processing_graph_(self, model_settings):
-        """Builds a TensorFlow graph to apply the input distortions.
-
-        Creates a graph that loads a WAVE file, decodes it, scales the volume,
-        shifts it in time, adds in background noise, calculates a spectrogram, and
-        then builds an MFCC fingerprint from that.
-
-        This must be called with an active TensorFlow session running, and it
-        creates multiple placeholder inputs, and one output:
-
-          - wav_filename_placeholder_: Filename of the WAV to load.
-          - foreground_volume_placeholder_: How loud the main clip should be.
-          - time_shift_padding_placeholder_: Where to pad the clip.
-          - time_shift_offset_placeholder_: How much to move the clip in time.
-          - background_data_placeholder_: PCM sample data for background noise.
-          - background_volume_placeholder_: Loudness of mixed-in background.
-          - mfcc_: Output 2D fingerprint of processed audio.
-
-        Args:
-          model_settings: Information about the current model being trained.
-        """
-        desired_samples = model_settings['desired_samples']
-
-        self.wav_filename_placeholder_ = tf.placeholder(tf.string, [])
-        wav_loader = io_ops.read_file(self.wav_filename_placeholder_)
-        wav_decoder = contrib_audio.decode_wav(
-            wav_loader, desired_channels=1, desired_samples=desired_samples)
-        wav_audio = wav_decoder.audio
-        sample_rate = wav_decoder.sample_rate
-
-        # Allow the audio sample's volume to be adjusted.
-        self.foreground_volume_placeholder_ = tf.placeholder(tf.float32, [])
-        scaled_foreground = tf.multiply(
-            wav_audio, self.foreground_volume_placeholder_)
-
-        # Shift the sample's start position, and pad any gaps with zeros.
-        self.time_shift_padding_placeholder_ = tf.placeholder(tf.int32, [2, 2])
-        self.time_shift_offset_placeholder_ = tf.placeholder(tf.int32, [2])
-        padded_foreground = tf.pad(
-            scaled_foreground,
-            self.time_shift_padding_placeholder_,
-            mode='CONSTANT')
-        sliced_foreground = tf.slice(
-            padded_foreground,
-            self.time_shift_offset_placeholder_,
-            [desired_samples, -1])
-
-        # Mix in background noise.
-        self.background_data_placeholder_ = tf.placeholder(
-            tf.float32, [desired_samples, 1])
-        self.background_volume_placeholder_ = tf.placeholder(tf.float32, [])
-        background_mul = tf.multiply(
-            self.background_data_placeholder_,
-            self.background_volume_placeholder_)
-        background_add = tf.add(background_mul, sliced_foreground)
-        background_clamp = tf.clip_by_value(background_add, -1.0, 1.0)
-
-        if model_settings['input_format'] == 'raw':
-            self.processed_input_ = background_clamp
-        else:
-            assert model_settings['input_format'] == 'spectrogram'
-            # Run the spectrogram and MFCC ops to get a 2D 'fingerprint' of the audio.
-            spectrogram = contrib_audio.audio_spectrogram(
-                background_clamp,
-                window_size=model_settings['window_size_samples'],
-                stride=model_settings['window_stride_samples'],
-                magnitude_squared=True)
-
-            self.processed_input_ = contrib_audio.mfcc(
-                spectrogram,
-                sample_rate,
-                lower_frequency_limit=model_settings['lower_frequency_limit'],
-                upper_frequency_limit=model_settings['upper_frequency_limit'],
-                filterbank_channel_count=model_settings['filterbank_channel_count'],
-                dct_coefficient_count=model_settings['dct_coefficient_count'])
+        search_path = os.path.join(
+            self.data_dir, BACKGROUND_NOISE_DIR_NAME, '*.wav')
+        for wav_path in gfile.Glob(search_path):
+            wav_rate, wav_audio = wf.read(wav_path)
+            self.background_data.append(wav_audio.astype(np.float32))
+        if not self.background_data:
+            raise Exception('No background wav files were found in ' + search_path)
 
     def set_size(self, mode):
         """Calculates the number of samples in the dataset partition.
@@ -376,17 +333,18 @@ class AudioProcessor(object):
         """
         return len(self.data_index[mode])
 
-    def get_data(self,
-                 sess,
-                 how_many, offset, model_settings,
-                 background_frequency=0.0,
-                 background_volume_range=0.0,
-                 pitch_shift_frequency=0.0,
-                 pitch_shift=0.0,
-                 time_stretch_frequency=0.0,
-                 time_stretch=0.0,
-                 time_shift=0,
-                 mode='training'):
+    def get_data(
+            self,
+            how_many, offset, model_settings,
+            background_frequency=0.0,
+            background_volume_range=0.0,
+            pitch_shift_frequency=0.0,
+            pitch_shift=0.0,
+            time_stretch_frequency=0.0,
+            time_stretch=0.0,
+            time_shift=0,
+            mode='training',
+            sess=None):
         """Gather samples from the data set, applying transformations as needed.
 
         When the mode is 'training', a random selection of samples will be returned,
@@ -418,9 +376,9 @@ class AudioProcessor(object):
             sample_count = max(0, min(how_many, len(candidates) - offset))
 
         # Data and labels will be populated and returned.
-        data = np.zeros((sample_count, model_settings['sample_size']))
-        labels = np.zeros((sample_count, model_settings['label_count']))
         desired_samples = model_settings['desired_samples']
+        data = np.zeros((sample_count, model_settings['desired_samples']))
+        labels = np.zeros((sample_count, model_settings['label_count']))
         use_background = self.background_data and (mode == 'training')
         pick_deterministically = (mode != 'training')
 
@@ -434,22 +392,68 @@ class AudioProcessor(object):
                 sample_index = np.random.randint(len(candidates))
             sample = candidates[sample_index]
 
-            # If we're time shifting, set up the offset for this sample.
-            if time_shift > 0:
-                time_shift_amount = np.random.randint(-time_shift, time_shift)
+            # If we want silence, mute out the main sample but leave the background.
+            if sample['label'] == SILENCE_LABEL:
+                foreground_volume = 0
             else:
-                time_shift_amount = 0
-            if time_shift_amount > 0:
-                time_shift_padding = [[time_shift_amount, 0], [0, 0]]
-                time_shift_offset = [0, 0]
+                foreground_volume = np.random.uniform(0.8, 1.0)
+
+            if foreground_volume > 0:
+                #sample_audio, sample_rate = lr.load(sample['file'], sr=model_settings['sample_rate'])
+                sample_rate, sample_audio = wf.read(sample['file'])
+                sample_audio = sample_audio.astype(np.float32)
+
+                if pitch_shift > 0 and np.random.uniform(0, 1) < pitch_shift_frequency:
+                    pitch_shift_amount = np.random.uniform(-pitch_shift, pitch_shift)
+                else:
+                    pitch_shift_amount = 0
+                #print('pitch shift: ', pitch_shift_amount)
+                if pitch_shift_amount != 0:
+                    sample_audio = lr.effects.pitch_shift(sample_audio, sample_rate, pitch_shift_amount)
+                    time_stretch_amount = 1.0
+                elif time_stretch > 0 and np.random.uniform(0, 1) < time_stretch_frequency:
+                    time_stretch_amount = np.random.uniform(1.0 - time_stretch, 1.0 + time_stretch)
+                else:
+                    time_stretch_amount = 1.0
+                #print('time stretch: ', time_stretch_amount)
+                if time_stretch_amount != 1.0:
+                    sample_audio = lr.effects.time_stretch(sample_audio, time_stretch_amount)
+
+                actual_samples = sample_audio.shape[0]
+                # If we're time shifting, set up the offset for this sample.
+                if time_shift > 0:
+                    time_shift_amount = np.random.randint(-time_shift, time_shift)
+                else:
+                    time_shift_amount = 0
+                #print('time shift: ', time_shift_amount)
+                if time_shift_amount < 0:
+                    crop_l = -time_shift_amount
+                    pad_l = 0
+                else:
+                    crop_l = 0
+                    pad_l = time_shift_amount
+                crop_r = min(actual_samples, desired_samples + crop_l - pad_l)
+                pad_r = max(0, desired_samples - (crop_r - crop_l + pad_l))
+                #print('cl, cr, pl, pr:', crop_l, crop_r, pad_l, pad_r)
+
+                sample_audio = sample_audio[crop_l:crop_r]
+                if pad_l and pad_r:
+                    sample_audio = np.r_[
+                        np.random.uniform(-0.01, 0.01, pad_l),
+                        sample_audio,
+                        np.random.uniform(-0.01, 0.01, pad_r)]
+                elif pad_l:
+                    sample_audio = np.r_[
+                        np.random.uniform(-0.01, 0.01, pad_l),
+                        sample_audio]
+                elif pad_r:
+                    sample_audio = np.r_[
+                        sample_audio,
+                        np.random.uniform(-0.01, 0.01, pad_r)]
+                #print(sample_audio.shape)
+                sample_audio *= foreground_volume
             else:
-                time_shift_padding = [[0, -time_shift_amount], [0, 0]]
-                time_shift_offset = [-time_shift_amount, 0]
-            input_dict = {
-                self.wav_filename_placeholder_: sample['file'],
-                self.time_shift_padding_placeholder_: time_shift_padding,
-                self.time_shift_offset_placeholder_: time_shift_offset,
-            }
+                sample_audio = np.zeros(desired_samples, dtype=np.float32)
 
             # Choose a section of background noise to mix in.
             if use_background and np.random.uniform(0, 1) < background_frequency:
@@ -457,83 +461,93 @@ class AudioProcessor(object):
                 background_samples = self.background_data[background_index]
                 background_offset = np.random.randint(
                     0, len(background_samples) - model_settings['desired_samples'])
-                background_clipped = background_samples[background_offset:(
-                    background_offset + desired_samples)]
-                background_reshaped = background_clipped.reshape([desired_samples, 1])
+                background_clipped = background_samples[
+                    background_offset:background_offset + desired_samples]
+                #background_reshaped = background_clipped.reshape([desired_samples, 1])
                 if sample['label'] == SILENCE_LABEL:
-                    background_volume = np.random.uniform(0, 0.3)
+                    background_volume = np.random.uniform(0.01, 0.3)
                 else:
-                    background_volume = np.random.uniform(0, background_volume_range)
-            else:
-                background_reshaped = np.zeros([desired_samples, 1])
-                background_volume = 0
-            input_dict[self.background_data_placeholder_] = background_reshaped
-            input_dict[self.background_volume_placeholder_] = background_volume
+                    background_volume = np.random.uniform(0.01, background_volume_range)
 
-            # If we want silence, mute out the main sample but leave the background.
-            if sample['label'] == SILENCE_LABEL:
-                input_dict[self.foreground_volume_placeholder_] = 0
-            else:
-                input_dict[self.foreground_volume_placeholder_] =\
-                    np.random.uniform(0.8, 1.0)
+                sample_audio = (sample_audio + background_clipped * background_volume).clip(-1.0, 1.0)
 
-            # Run the graph to produce the output audio.
-            data[i - offset, :] = sess.run(
-                self.processed_input_,
-                feed_dict=input_dict).flatten()
+            data[i - offset, :] = sample_audio #np.expand_dims(sample_audio, axis=1)
             label_index = self.word_to_index[sample['label']]
             labels[i - offset, label_index] = 1
 
         return data, labels
 
-    def get_unprocessed_data(self, how_many, model_settings, mode):
-        """Retrieve sample data for the given partition, with no transformations.
 
-        Args:
-          how_many: Desired number of samples to return. -1 means the entire
-            contents of this partition.
-          model_settings: Information about the current model being trained.
-          mode: Which partition to use, must be 'training', 'validation', or
-            'testing'.
+class InputDataIterator:
+    def __init__(
+            self,
+            processor,
+            how_many, offset, model_settings,
+            background_frequency=0.0,
+            background_volume_range=0.0,
+            pitch_shift_frequency=0.0,
+            pitch_shift=0.0,
+            time_stretch_frequency=0.0,
+            time_stretch=0.0,
+            time_shift=0,
+            mode='training',
+            sess=None):
 
-        Returns:
-          List of sample data for the samples, and list of labels in one-hot form.
-        """
-        candidates = self.data_index[mode]
-        if how_many == -1:
-            sample_count = len(candidates)
-        else:
-            sample_count = how_many
-        desired_samples = model_settings['desired_samples']
-        words_list = self.words_list
-        data = np.zeros((sample_count, desired_samples))
-        labels = []
-        with tf.Session(graph=tf.Graph()) as sess:
-            wav_filename_placeholder = tf.placeholder(tf.string, [])
-            wav_loader = io_ops.read_file(wav_filename_placeholder)
-            wav_decoder = contrib_audio.decode_wav(
-                wav_loader, desired_channels=1, desired_samples=desired_samples)
-            foreground_volume_placeholder = tf.placeholder(tf.float32, [])
-            scaled_foreground = tf.multiply(
-                wav_decoder.audio, foreground_volume_placeholder)
+        self.processor = processor
+        self.get_fn = lambda: self.processor.get_data(
+            how_many, offset, model_settings,
+            background_frequency=background_frequency,
+            background_volume_range=background_volume_range,
+            pitch_shift_frequency=pitch_shift_frequency,
+            pitch_shift=pitch_shift,
+            time_stretch_frequency=time_stretch_frequency,
+            time_stretch=time_stretch,
+            time_shift=time_shift,
+            mode=mode,
+            sess=sess
+        )
 
-            for i in range(sample_count):
-                if how_many == -1:
-                    sample_index = i
-                else:
-                    sample_index = np.random.randint(len(candidates))
-                sample = candidates[sample_index]
-                input_dict = {wav_filename_placeholder: sample['file']}
+    def __next__(self):
+        return self.get_fn()
 
-                if sample['label'] == SILENCE_LABEL:
-                    input_dict[foreground_volume_placeholder] = 0
-                else:
-                    input_dict[foreground_volume_placeholder] = 1
+    def __iter__(self):
+        return self
 
-                data[i, :] = sess.run(
-                    scaled_foreground,
-                    feed_dict=input_dict).flatten()
-                label_index = self.word_to_index[sample['label']]
-                labels.append(words_list[label_index])
 
-        return data, labels
+class MpIterator:
+    def __init__(self, iterator, maxsize=32):
+        self.queue = mp.Queue(maxsize=maxsize)
+        self.iterator = iterator
+        self.is_done = mp.Event()
+        self.is_shutdown = mp.Event()
+        self.processes = [mp.Process(target=self._run) for _ in range(4)]
+        for p in self.processes:
+            p.start()
+
+    def _run(self):
+        try:
+            print("Entering run loop")
+            sys.stdout.flush()
+            while not self.is_shutdown.is_set():
+                element = next(self.iterator)
+                self.queue.put(element)
+
+            print("Waiting on done")
+            self.is_done.wait()
+        except Exception as e:
+            self.queue.put(e)
+            self.is_shutdown.set()
+            self.queue.close()
+
+    def shutdown(self):
+        self.is_shutdown.set()
+        self.queue.close()
+
+    def done(self):
+        self.is_done.set()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return self.queue.get()

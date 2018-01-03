@@ -79,7 +79,7 @@ import numpy as np
 import tensorflow as tf
 slim = tf.contrib.slim
 
-import input_data
+import input_data_rosa as input_data
 from models.model_factory import *
 from tensorflow.python.platform import gfile
 
@@ -133,14 +133,15 @@ def main(_):
     for k, v in model_settings.items():
         print(k, v)
 
-    audio_processor = input_data.AudioProcessor(
+    audio_processor = input_data.AudioProcessorRosa(
         FLAGS.data_dir,
         FLAGS.silence_percentage,
         FLAGS.unknown_percentage,
         FLAGS.wanted_words.split(','),
         FLAGS.validation_percentage,
-        FLAGS.testing_percentage, model_settings, use_rosa=True)
+        FLAGS.testing_percentage, model_settings)
     sample_size = model_settings['sample_size']
+    desired_samples = model_settings['desired_samples']
     label_count = model_settings['label_count']
     time_shift_samples = int((FLAGS.time_shift_ms * FLAGS.sample_rate) / 1000)
 
@@ -159,39 +160,46 @@ def main(_):
             'lists, but are %d and %d long instead' % (len(training_steps_list),
                                                        len(learning_rates_list)))
 
-    # Create placeholder variables
-    sample_input = tf.placeholder(
-        tf.float32, [None, sample_size], name='sample_input')
-    ground_truth_input = tf.placeholder(
-        tf.float32, [None, label_count], name='groundtruth_input')
-    learning_rate_input = tf.placeholder(
-        tf.float32, [], name='learning_rate_input')
-    is_training_input = tf.placeholder_with_default(True, [], name='is_training_input')
+    with tf.device('/device:GPU:0'):
+        # Create placeholder variables
+        sample_input = tf.placeholder(
+            tf.float32, [None, desired_samples], name='sample_input')
+        # sample_rate = tf.placeholder(tf.int32, [], name='sample_rate')
+        sample_rate = 16000
+        ground_truth_input = tf.placeholder(
+            tf.float32, [None, label_count], name='groundtruth_input')
+        learning_rate_input = tf.placeholder(
+            tf.float32, [], name='learning_rate_input')
+        is_training_input = tf.placeholder_with_default(True, [], name='is_training_input')
 
-    # Instantiate model graph
-    net = create_model(
-        sample_input,
-        model_settings,
-        FLAGS.model,
-        dropout_prob=0.6,
-        is_training=is_training_input)
-    if isinstance(net, tuple):
-        logits, endpoints = net
-    else:
-        logits, endpoints = net, {}
-    print(endpoints)
-    print(net)
+        if model_settings['input_format'] == 'spectrogram':
+            sample_input_processed = input_data.spectorgram_graph2(
+                sample_input, sample_rate, model_settings)
+        else:
+            sample_input_processed = sample_input
+
+        # Instantiate model graph
+        net = create_model(
+            sample_input_processed,
+            model_settings,
+            FLAGS.model,
+            dropout_prob=0.6,
+            is_training=is_training_input)
+        if isinstance(net, tuple):
+            logits, endpoints = net
+        else:
+            logits, endpoints = net, {}
+
+        # Define loss and optimizer
+        cross_entropy_op = tf.losses.softmax_cross_entropy(
+            onehot_labels=ground_truth_input, logits=logits, label_smoothing=0.05)
+        if 'AuxLogits' in endpoints:
+            tf.losses.softmax_cross_entropy(
+                onehot_labels=ground_truth_input, logits=endpoints['AuxLogits'],
+                label_smoothing=0.05, weights=0.4, scope='aux_loss')
 
     for variable in slim.get_model_variables():
         tf.summary.histogram(variable.op.name, variable)
-
-    # Define loss and optimizer
-    cross_entropy_op = tf.losses.softmax_cross_entropy(
-        onehot_labels=ground_truth_input, logits=logits, label_smoothing=0.05)
-    if 'AuxLogits' in endpoints:
-        tf.losses.softmax_cross_entropy(
-            onehot_labels=ground_truth_input, logits=endpoints['AuxLogits'],
-            label_smoothing=0.05, weights=0.4, scope='aux_loss')
 
     for loss in tf.get_collection(tf.GraphKeys.LOSSES):
         tf.summary.scalar('losses/%s' % loss.op.name, loss)
@@ -255,6 +263,21 @@ def main(_):
         f.write('\n'.join(audio_processor.words_list))
 
     # Training loop.
+    train_data_iter = input_data.InputDataIterator(
+        audio_processor,
+        FLAGS.batch_size, 0, model_settings,
+        FLAGS.background_frequency,
+        FLAGS.background_volume,
+        pitch_shift_frequency=0.5,
+        pitch_shift=2.0,
+        time_stretch_frequency=0.5,
+        time_stretch=0.2,
+        time_shift=time_shift_samples,
+        mode='training',
+        sess=sess
+    )
+    train_data_iter = input_data.MpIterator(train_data_iter)
+
     training_steps_max = np.sum(training_steps_list)
     for training_step in range(start_step, training_steps_max + 1):
         is_last_step = (training_step == training_steps_max)
@@ -268,17 +291,7 @@ def main(_):
                 break
 
         # Pull the audio samples we'll use for training.
-        train_samples, train_ground_truth = audio_processor.get_data(
-            sess,
-            FLAGS.batch_size, 0, model_settings,
-            FLAGS.background_frequency,
-            FLAGS.background_volume,
-            pitch_shift_frequency=0.5,
-            pitch_shift=2.0,
-            time_stretch_frequency=0.5,
-            time_stretch=0.2,
-            time_shift=time_shift_samples,
-            mode='training')
+        train_samples, train_ground_truth = next(train_data_iter)
 
         # Run the graph with this batch of training data.
         ops = {
@@ -312,9 +325,9 @@ def main(_):
             total_conf_matrix = None
             for i in range(0, eval_set_size, FLAGS.batch_size):
                 validation_samples, validation_ground_truth = audio_processor.get_data(
-                    sess,
                     FLAGS.batch_size, i, model_settings,
-                    mode='validation')
+                    mode='validation',
+                    sess=sess)
 
                 # Run a validation step and capture training summaries for TensorBoard
                 # with the `merged` op.
@@ -493,7 +506,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--output_dir',
         type=str,
-        default='/data/x/commands_out',
+        default='/data/f/commands_out',
         help='Directory to write event logs and checkpoint.')
     parser.add_argument(
         '--save_step_interval',
