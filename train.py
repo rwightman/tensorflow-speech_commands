@@ -160,43 +160,43 @@ def main(_):
             'lists, but are %d and %d long instead' % (len(training_steps_list),
                                                        len(learning_rates_list)))
 
-    with tf.device('/device:GPU:0'):
-        # Create placeholder variables
-        sample_input = tf.placeholder(
-            tf.float32, [None, desired_samples], name='sample_input')
-        # sample_rate = tf.placeholder(tf.int32, [], name='sample_rate')
-        sample_rate = 16000
-        ground_truth_input = tf.placeholder(
-            tf.float32, [None, label_count], name='groundtruth_input')
-        learning_rate_input = tf.placeholder(
-            tf.float32, [], name='learning_rate_input')
-        is_training_input = tf.placeholder_with_default(True, [], name='is_training_input')
+    # Create placeholder variables
+    sample_input = tf.placeholder(
+        tf.float32, [None, desired_samples], name='sample_input')
+    # sample_rate = tf.placeholder(tf.int32, [], name='sample_rate')
+    sample_rate = 16000
+    ground_truth_input = tf.placeholder(
+        tf.float32, [None, label_count], name='groundtruth_input')
+    learning_rate_input = tf.placeholder(
+        tf.float32, [], name='learning_rate_input')
+    is_training_input = tf.placeholder_with_default(True, [], name='is_training_input')
 
-        if model_settings['input_format'] == 'spectrogram':
-            sample_input_processed = input_data.spectorgram_graph2(
-                sample_input, sample_rate, model_settings)
-        else:
-            sample_input_processed = sample_input
+    if model_settings['input_format'] == 'spectrogram':
+        sample_input_processed = input_data.spectrogram_graph2(
+            sample_input, sample_rate, model_settings)
+    else:
+        sample_input_processed = sample_input
+    print(sample_input_processed.shape)
 
-        # Instantiate model graph
-        net = create_model(
-            sample_input_processed,
-            model_settings,
-            FLAGS.model,
-            dropout_prob=0.6,
-            is_training=is_training_input)
-        if isinstance(net, tuple):
-            logits, endpoints = net
-        else:
-            logits, endpoints = net, {}
+    # Instantiate model graph
+    net = create_model(
+        sample_input_processed,
+        model_settings,
+        FLAGS.model,
+        dropout_prob=0.6,
+        is_training=is_training_input)
+    if isinstance(net, tuple):
+        logits, endpoints = net
+    else:
+        logits, endpoints = net, {}
 
-        # Define loss and optimizer
-        cross_entropy_op = tf.losses.softmax_cross_entropy(
-            onehot_labels=ground_truth_input, logits=logits, label_smoothing=0.05)
-        if 'AuxLogits' in endpoints:
-            tf.losses.softmax_cross_entropy(
-                onehot_labels=ground_truth_input, logits=endpoints['AuxLogits'],
-                label_smoothing=0.05, weights=0.4, scope='aux_loss')
+    # Define loss and optimizer
+    cross_entropy_op = tf.losses.softmax_cross_entropy(
+        onehot_labels=ground_truth_input, logits=logits, label_smoothing=0.05)
+    if 'AuxLogits' in endpoints:
+        tf.losses.softmax_cross_entropy(
+            onehot_labels=ground_truth_input, logits=endpoints['AuxLogits'],
+            label_smoothing=0.05, weights=0.4, scope='aux_loss')
 
     for variable in slim.get_model_variables():
         tf.summary.histogram(variable.op.name, variable)

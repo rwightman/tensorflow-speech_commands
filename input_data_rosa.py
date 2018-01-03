@@ -113,55 +113,60 @@ def which_set(filename, validation_percentage, testing_percentage):
 
 def spectrogram_graph(input, sample_rate, model_settings):
     assert model_settings['input_format'] == 'spectrogram'
-    # Run the spectrogram and MFCC ops to get a 2D 'fingerprint' of the audio.
-    spectrogram = contrib_audio.audio_spectrogram(
-        input,
-        window_size=model_settings['window_size_samples'],
-        stride=model_settings['window_stride_samples'],
-        magnitude_squared=True)
 
-    processed_input = contrib_audio.mfcc(
-        spectrogram,
-        sample_rate,
-        lower_frequency_limit=model_settings['lower_frequency_limit'],
-        upper_frequency_limit=model_settings['upper_frequency_limit'],
-        filterbank_channel_count=model_settings['filterbank_channel_count'],
-        dct_coefficient_count=model_settings['dct_coefficient_count'])
+    def _do(input):
+        input = tf.reshape(input, [input.shape[0], 1])
+        # Run the spectrogram and MFCC ops to get a 2D 'fingerprint' of the audio.
+        spectrogram = contrib_audio.audio_spectrogram(
+            input,
+            window_size=model_settings['window_size_samples'],
+            stride=model_settings['window_stride_samples'],
+            magnitude_squared=True)
 
-    return processed_input
+        processed_input = contrib_audio.mfcc(
+            spectrogram,
+            sample_rate,
+            lower_frequency_limit=model_settings['lower_frequency_limit'],
+            upper_frequency_limit=model_settings['upper_frequency_limit'],
+            filterbank_channel_count=model_settings['filterbank_channel_count'],
+            dct_coefficient_count=model_settings['dct_coefficient_count'])
+        return processed_input
+
+    return tf.map_fn(_do, input)
 
 
-def spectorgram_graph2(input, sample_rate, model_settings):
-    # A batch of float32 time-domain signals in the range [-1, 1] with shape
-    # [batch_size, signal_length]. Both batch_size and signal_length may be unknown.
-    #signals = tf.placeholder(tf.float32, [None, None])
+def spectrogram_graph2(input, sample_rate, model_settings, power=True):
+    """A batch + GPU capable spectrogram impl
+    """
 
     # `stfts` is a complex64 Tensor representing the Short-time Fourier Transform of
     # each signal in `signals`. Its shape is [batch_size, ?, fft_unique_bins]
-    # where fft_unique_bins = fft_length // 2 + 1 = 513.
+    # where fft_unique_bins = fft_length // 2 + 1. fft_length is set to nearest
+    # enclosing power of two of window size.
     stfts = tf.contrib.signal.stft(
         input,
         frame_length=model_settings['window_size_samples'],
-        frame_step=model_settings['window_stride_samples'],
-        fft_length=1024)
+        frame_step=model_settings['window_stride_samples'])
 
-    # A power spectrogram is the squared magnitude of the complex-valued STFT.
-    # A float32 Tensor of shape [batch_size, ?, 513].
-    # power_spectrograms = tf.real(stfts * tf.conj(stfts))
-
-    # An energy spectrogram is the magnitude of the complex-valued STFT.
-    # A float32 Tensor of shape [batch_size, ?, 513].
-    magnitude_spectrograms = tf.abs(stfts)
+    if power:
+        # A power spectrogram is the squared magnitude of the complex-valued STFT.
+        # A float32 Tensor of shape [batch_size, ?, 513].
+        spectrograms = tf.real(stfts * tf.conj(stfts))
+    else:
+        # An energy spectrogram is the magnitude of the complex-valued STFT.
+        # A float32 Tensor of shape [batch_size, ?, 513].
+        spectrograms = tf.abs(stfts)
 
     # Warp the linear-scale, magnitude spectrograms into the mel-scale.
-    num_spectrogram_bins = magnitude_spectrograms.shape[-1].value
+    num_spectrogram_bins = spectrograms.shape[-1].value
     lower_edge_hertz = model_settings['lower_frequency_limit']
     upper_edge_hertz = model_settings['upper_frequency_limit']
-    num_mel_bins = 64
+    num_mel_bins = model_settings['filterbank_channel_count']
+    dct_coefficient_count = model_settings['dct_coefficient_count']
     linear_to_mel_weight_matrix = tf.contrib.signal.linear_to_mel_weight_matrix(
         num_mel_bins, num_spectrogram_bins, sample_rate,
         lower_edge_hertz, upper_edge_hertz)
-    print(magnitude_spectrograms.shape, linear_to_mel_weight_matrix.shape)
+    print(spectrograms.shape, linear_to_mel_weight_matrix.shape)
 
     # mel_spectrograms = tf.tensordot(
     #     magnitude_spectrograms, linear_to_mel_weight_matrix, 1)
@@ -171,17 +176,17 @@ def spectorgram_graph2(input, sample_rate, model_settings):
     # print(mel_spectrograms.shape)
 
     mel_spectrograms = tf.matmul(
-        tf.reshape(magnitude_spectrograms, [-1, magnitude_spectrograms.shape[-1]]),
+        tf.reshape(spectrograms, [-1, spectrograms.shape[-1]]),
         linear_to_mel_weight_matrix)
     mel_spectrograms = tf.reshape(
         mel_spectrograms,
-        [-1, magnitude_spectrograms.shape[1], linear_to_mel_weight_matrix.shape[-1]])
+        [-1, spectrograms.shape[1], linear_to_mel_weight_matrix.shape[-1]])
     print(mel_spectrograms.shape)
 
     log_mel_spectrograms = tf.log(mel_spectrograms + 1e6)
 
-    # Keep the first `num_mfccs` MFCCs.
-    mfccs = tf.contrib.signal.mfccs_from_log_mel_spectrograms(log_mel_spectrograms)
+    mfccs = tf.contrib.signal.mfccs_from_log_mel_spectrograms(
+        log_mel_spectrograms)[..., :dct_coefficient_count]
     print(mfccs.shape)
 
     return mfccs
@@ -518,7 +523,6 @@ class MpIterator:
     def __init__(self, iterator, maxsize=32):
         self.queue = mp.Queue(maxsize=maxsize)
         self.iterator = iterator
-        self.is_done = mp.Event()
         self.is_shutdown = mp.Event()
         self.processes = [mp.Process(target=self._run) for _ in range(4)]
         for p in self.processes:
@@ -531,9 +535,7 @@ class MpIterator:
             while not self.is_shutdown.is_set():
                 element = next(self.iterator)
                 self.queue.put(element)
-
-            print("Waiting on done")
-            self.is_done.wait()
+            print("Exiting run loop")
         except Exception as e:
             self.queue.put(e)
             self.is_shutdown.set()
@@ -542,9 +544,6 @@ class MpIterator:
     def shutdown(self):
         self.is_shutdown.set()
         self.queue.close()
-
-    def done(self):
-        self.is_done.set()
 
     def __iter__(self):
         return self
