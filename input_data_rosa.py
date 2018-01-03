@@ -25,11 +25,6 @@ import os.path
 import random
 import re
 import sys
-import multiprocessing as mp
-try:
-    mp.set_start_method('spawn')
-except RuntimeError:
-    pass
 
 import numpy as np
 import tensorflow as tf
@@ -40,6 +35,12 @@ from tensorflow.contrib.framework.python.ops import audio_ops as contrib_audio
 from tensorflow.python.ops import io_ops
 from tensorflow.python.platform import gfile
 from tensorflow.python.util import compat
+
+import multiprocessing as mp
+try:
+    mp.set_start_method('spawn')
+except RuntimeError:
+    pass
 
 MAX_NUM_WAVS_PER_CLASS = 2 ** 27 - 1  # ~134M
 SILENCE_LABEL = '_silence_'
@@ -524,13 +525,14 @@ class MpIterator:
         self.queue = mp.Queue(maxsize=maxsize)
         self.iterator = iterator
         self.is_shutdown = mp.Event()
-        self.processes = [mp.Process(target=self._run) for _ in range(4)]
+        self.processes = [mp.Process(target=self._run, args=[i]) for i in range(4)]
         for p in self.processes:
             p.start()
 
-    def _run(self):
+    def _run(self, i):
         try:
-            print("Entering run loop")
+            print("Entering run loop", i)
+            np.random.seed(RANDOM_SEED + i)
             sys.stdout.flush()
             while not self.is_shutdown.is_set():
                 element = next(self.iterator)
