@@ -323,8 +323,9 @@ class AudioProcessorRosa(object):
         search_path = os.path.join(
             self.data_dir, BACKGROUND_NOISE_DIR_NAME, '*.wav')
         for wav_path in gfile.Glob(search_path):
-            wav_rate, wav_audio = wf.read(wav_path)
-            self.background_data.append(wav_audio.astype(np.float32))
+            wav_audio, wav_rate = lr.load(wav_path)
+            #wav_rate, wav_audio = wf.read(wav_path)
+            self.background_data.append(wav_audio)
         if not self.background_data:
             raise Exception('No background wav files were found in ' + search_path)
 
@@ -383,8 +384,8 @@ class AudioProcessorRosa(object):
 
         # Data and labels will be populated and returned.
         desired_samples = model_settings['desired_samples']
-        data = np.zeros((sample_count, model_settings['desired_samples']))
-        labels = np.zeros((sample_count, model_settings['label_count']))
+        data = np.zeros((sample_count, model_settings['desired_samples']), dtype=np.float32)
+        labels = np.zeros((sample_count, model_settings['label_count']), dtype=np.int32)
         use_background = self.background_data and (mode == 'training')
         pick_deterministically = (mode != 'training')
 
@@ -400,14 +401,15 @@ class AudioProcessorRosa(object):
 
             # If we want silence, mute out the main sample but leave the background.
             if sample['label'] == SILENCE_LABEL:
-                foreground_volume = 0
+                foreground_volume = 0.
             else:
-                foreground_volume = np.random.uniform(0.8, 1.0)
+                foreground_volume = np.random.uniform(0.75, 1.0)
 
             if foreground_volume > 0:
                 #sample_audio, sample_rate = lr.load(sample['file'], sr=model_settings['sample_rate'])
                 sample_rate, sample_audio = wf.read(sample['file'])
-                sample_audio = sample_audio.astype(np.float32)
+                sample_audio = sample_audio.astype(np.float32) / 2**15
+                #print(sample_audio.min(), sample_audio.max(), sample_audio.mean())
 
                 if pitch_shift > 0 and np.random.uniform(0, 1) < pitch_shift_frequency:
                     pitch_shift_amount = np.random.uniform(-pitch_shift, pitch_shift)
@@ -445,18 +447,17 @@ class AudioProcessorRosa(object):
                 sample_audio = sample_audio[crop_l:crop_r]
                 if pad_l and pad_r:
                     sample_audio = np.r_[
-                        np.random.uniform(-0.01, 0.01, pad_l),
+                        np.random.uniform(-0.001, 0.001, pad_l).astype(np.float32),
                         sample_audio,
-                        np.random.uniform(-0.01, 0.01, pad_r)]
+                        np.random.uniform(-0.001, 0.001, pad_r).astype(np.float32)]
                 elif pad_l:
                     sample_audio = np.r_[
-                        np.random.uniform(-0.01, 0.01, pad_l),
+                        np.random.uniform(-0.001, 0.001, pad_l).astype(np.float32),
                         sample_audio]
                 elif pad_r:
                     sample_audio = np.r_[
                         sample_audio,
-                        np.random.uniform(-0.01, 0.01, pad_r)]
-                #print(sample_audio.shape)
+                        np.random.uniform(-0.001, 0.001, pad_r).astype(np.float32)]
                 sample_audio *= foreground_volume
             else:
                 sample_audio = np.zeros(desired_samples, dtype=np.float32)
@@ -467,15 +468,16 @@ class AudioProcessorRosa(object):
                 background_samples = self.background_data[background_index]
                 background_offset = np.random.randint(
                     0, len(background_samples) - model_settings['desired_samples'])
-                background_clipped = background_samples[
+                background_cropped = background_samples[
                     background_offset:background_offset + desired_samples]
-                #background_reshaped = background_clipped.reshape([desired_samples, 1])
+                #background_reshaped = background_cropped.reshape([desired_samples, 1])
                 if sample['label'] == SILENCE_LABEL:
                     background_volume = np.random.uniform(0.01, 0.3)
                 else:
                     background_volume = np.random.uniform(0.01, background_volume_range)
+                sample_audio = (sample_audio + background_cropped * background_volume).clip(-1.0, 1.0)
 
-                sample_audio = (sample_audio + background_clipped * background_volume).clip(-1.0, 1.0)
+            #lr.output.write_wav('./temp/lr-%d.wav' % i, sample_audio, 16000)
 
             data[i - offset, :] = sample_audio #np.expand_dims(sample_audio, axis=1)
             label_index = self.word_to_index[sample['label']]
