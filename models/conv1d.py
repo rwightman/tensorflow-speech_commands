@@ -17,7 +17,7 @@ def conv1d_args_scope(
         batch_norm_epsilon=1e-5,
         batch_norm_scale=True,
         activation_fn=tf.nn.elu,
-        use_batch_norm=True,
+        use_batch_norm=False,
         data_format='NCW'):
 
     batch_norm_params = {
@@ -29,12 +29,12 @@ def conv1d_args_scope(
     }
     with slim.arg_scope(
             [slim.convolution, slim.fully_connected],
-            weights_regularizer=slim.l2_regularizer(weight_decay)):
+            weights_regularizer=slim.l2_regularizer(weight_decay),
+            weights_initializer=slim.variance_scaling_initializer(),
+            activation_fn=activation_fn):
         with slim.arg_scope(
                 [slim.convolution],
                 data_format=data_format,
-                weights_initializer=slim.variance_scaling_initializer(),
-                activation_fn=activation_fn,
                 normalizer_fn=slim.batch_norm if use_batch_norm else None,
                 normalizer_params=batch_norm_params,
                 padding='SAME'):
@@ -52,7 +52,7 @@ def conv1d_args_scope(
                     return arg_sc
 
 
-def create_conv1d_lame_model(
+def create_conv1d_lame3_model(
         waveform_input, model_settings, dropout_prob=1.0, is_training=True):
     """Convolutional 1d model.
     """
@@ -87,7 +87,52 @@ def create_conv1d_lame_model(
             net = slim.flatten(net)
             net = slim.fully_connected(net, 1024)
             net = slim.dropout(net, dropout_prob)
-            final_fc = slim.fully_connected(net, model_settings['label_count'])
+            final_fc = slim.fully_connected(
+                net, model_settings['label_count'], activation_fn=None)
+            print(final_fc.shape)
+
+    return final_fc
+
+
+def create_conv1d_lame2_model(
+        waveform_input, model_settings, dropout_prob=1.0, is_training=True):
+    """Convolutional 1d model.
+    """
+    num_samples = model_settings['desired_samples']
+    input_3d = tf.reshape(
+        waveform_input, [-1, 1, num_samples])
+    print(input_3d.shape)
+
+    with slim.arg_scope(conv1d_args_scope()):
+        with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
+            net = slim.convolution(input_3d, 64, 3, stride=2)
+            net = slim.convolution(net, 64, 3, stride=2)
+            net = slim.pool(net, 3, 'MAX', stride=2)
+            print(net.shape)
+            net = slim.convolution(net, 128, 3)
+            net = slim.convolution(net, 128, 3)
+            net = slim.pool(net, 3, 'MAX', stride=2)
+            net = slim.convolution(net, 256, 3)
+            net = slim.convolution(net, 256, 3)
+            net = slim.pool(net, 3, 'MAX', stride=2)
+            net = slim.convolution(net, 256, 3)
+            net = slim.convolution(net, 256, 3)
+            net = slim.pool(net, 3, 'MAX', stride=2)
+            net = slim.convolution(net, 512, 3)
+            net = slim.convolution(net, 512, 3)
+            net = slim.pool(net, 3, 'MAX', stride=2)
+            net = slim.convolution(net, 1024, 3)
+            net = slim.convolution(net, 1024, 3)
+            print(net.shape)
+            net_global_avg = tf.reduce_mean(net, [2])
+            net_global_max = tf.reduce_max(net, [2])
+            print(net.shape)
+            net = 0.5 * (net_global_avg + net_global_max)
+            net = slim.flatten(net)
+            net = slim.fully_connected(net, 1024)
+            net = slim.dropout(net, dropout_prob)
+            final_fc = slim.fully_connected(
+                net, model_settings['label_count'], activation_fn=None)
             print(final_fc.shape)
 
     return final_fc
@@ -105,21 +150,21 @@ def create_conv1d_a_model(
     with slim.arg_scope(conv1d_args_scope()):
         with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
             net = slim.convolution(input_3d, 64, 3, stride=2)
-            net = slim.convolution(net, 64, 3)
+            net = slim.convolution(net, 64, 3, stride=2)
             print(net.shape)
             net = slim.pool(net, 3, 'MAX', stride=2)
             print(net.shape)
+            net = slim.convolution(net, 128, 3, rate=1)
             net = slim.convolution(net, 128, 3, rate=2)
-            net = slim.convolution(net, 128, 3, rate=4)
             net = slim.pool(net, 3, 'MAX', stride=2)
+            net = slim.convolution(net, 256, 3, rate=4)
             net = slim.convolution(net, 256, 3, rate=8)
-            net = slim.convolution(net, 256, 3, rate=16)
             net = slim.pool(net, 3, 'MAX', stride=2)
+            net = slim.convolution(net, 512, 3, rate=16)
             net = slim.convolution(net, 512, 3, rate=32)
-            net = slim.convolution(net, 512, 3, rate=64)
             net = slim.pool(net, 3, 'MAX', stride=2)
+            net = slim.convolution(net, 1024, 3, rate=64)
             net = slim.convolution(net, 1024, 3, rate=128)
-            net = slim.convolution(net, 1024, 3, rate=256)
             print(net.shape)
             net_global_avg = tf.reduce_mean(net, [2])
             net_global_max = tf.reduce_max(net, [2])
@@ -127,7 +172,8 @@ def create_conv1d_a_model(
             net = slim.flatten(net)
             net = slim.fully_connected(net, 1024)
             net = slim.dropout(net, dropout_prob)
-            final_fc = slim.fully_connected(net, model_settings['label_count'])
+            final_fc = slim.fully_connected(
+                net, model_settings['label_count'], activation_fn=None)
             print(final_fc.shape)
 
     return final_fc
@@ -172,7 +218,8 @@ def create_conv1d_b_model(
             net = slim.fully_connected(net, 1024)
             print('fc1', net.shape)
             net = slim.dropout(net, dropout_prob)
-            final_fc = slim.fully_connected(net, model_settings['label_count'])
+            final_fc = slim.fully_connected(
+                net, model_settings['label_count'], activation_fn=None)
             print(final_fc.shape)
 
     return final_fc
@@ -216,7 +263,8 @@ def create_conv1d_c_model(
             net = slim.fully_connected(net, 1024)
             print('fc1', net.shape)
             net = slim.dropout(net, dropout_prob)
-            final_fc = slim.fully_connected(net, model_settings['label_count'])
+            final_fc = slim.fully_connected(
+                net, model_settings['label_count'], activation_fn=None)
             print('final', final_fc.shape)
 
     return final_fc
@@ -261,10 +309,10 @@ def create_conv1d_d_model(
             print(net.shape, len(dilated))
 
             net = sum(dilated)
-            #net = net[:, :, net.shape[2]//2]
-            net = slim.convolution(net[:,:,250:], 512, 1, stride=250)
-            #net = slim.pool(net, 1, 'MAX', stride=250)
             net = tf.nn.elu(net)
+            #net = net[:, :, net.shape[2]//2]
+            net = slim.convolution(net[:, :, 250:], 512, 1, stride=250)
+            #net = slim.pool(net, 1, 'MAX', stride=250)
             print(net.shape)
 
             #net = slim.convolution(net, 1024, 1, stride=2)
@@ -280,7 +328,8 @@ def create_conv1d_d_model(
             print('fc1', net.shape)
 
             net = slim.dropout(net, dropout_prob)
-            final_fc = slim.fully_connected(net, model_settings['label_count'])
+            final_fc = slim.fully_connected(
+                net, model_settings['label_count'], activation_fn=None)
             print('final', final_fc.shape)
 
     return final_fc
