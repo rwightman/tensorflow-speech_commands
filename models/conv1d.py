@@ -52,7 +52,7 @@ def conv1d_args_scope(
                     return arg_sc
 
 
-def create_conv1d_lame3_model(
+def create_conv1d_basic3_model(
         waveform_input, model_settings, dropout_prob=1.0, is_training=True):
     """Convolutional 1d model.
     """
@@ -94,7 +94,7 @@ def create_conv1d_lame3_model(
     return final_fc
 
 
-def create_conv1d_lame2_model(
+def create_conv1d_basic2_model(
         waveform_input, model_settings, dropout_prob=1.0, is_training=True):
     """Convolutional 1d model.
     """

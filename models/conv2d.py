@@ -27,10 +27,10 @@ def conv2d_args_scope(weight_decay=0.0001,
     }
     with slim.arg_scope(
             [slim.conv2d, slim.fully_connected],
-            weights_regularizer=slim.l2_regularizer(weight_decay)):
+            weights_regularizer=slim.l2_regularizer(weight_decay),
+            weights_initializer=slim.variance_scaling_initializer()):
         with slim.arg_scope(
                 [slim.conv2d],
-                weights_initializer=slim.variance_scaling_initializer(),
                 activation_fn=activation_fn,
                 normalizer_fn=slim.batch_norm if use_batch_norm else None,
                 normalizer_params=batch_norm_params):
@@ -64,7 +64,6 @@ def create_conv2d_model(
             net = slim.max_pool2d(net, 2)
             net = slim.conv2d(net, 256, (1, 3), padding='SAME')
             net = slim.conv2d(net, 256, (1, 3), padding='SAME')
-            #net = slim.max_pool2d(net, 2)
             net = tf.reduce_mean(net, [2])
             print(net.shape)
             net = slim.dropout(net, dropout_prob)

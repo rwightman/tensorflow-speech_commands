@@ -87,6 +87,7 @@ FLAGS = None
 
 
 def _prepare_model_settings(num_words):
+    print(FLAGS.model)
     if any(n in FLAGS.model for n in ['conv1d']):
         model_settings = prepare_model_settings(
             num_words,
@@ -209,6 +210,20 @@ def main(_):
     if FLAGS.opt == 'adam':
         optimizer = tf.train.AdamOptimizer(
             learning_rate_input)
+    elif FLAGS.opt == 'adadelta':
+        optimizer = tf.train.AdadeltaOptimizer(learning_rate_input)
+    elif FLAGS.opt == 'adagrad':
+        optimizer = tf.train.AdagradOptimizer(learning_rate_input)
+    elif FLAGS.opt == 'rms':
+        optimizer = tf.train.RMSPropOptmizer(
+            learning_rate_input,
+            epsilon=1e-2,
+            centered=True,
+            momentum=0.9)
+    elif FLAGS.opt == 'sgd':
+        optimizer = tf.train.MomentumOptimizer(
+            learning_rate_input,
+            momentum=0.9)
     else:
         optimizer = tf.train.MomentumOptimizer(
             learning_rate_input,
@@ -268,15 +283,15 @@ def main(_):
         FLAGS.batch_size, 0, model_settings,
         FLAGS.background_frequency,
         FLAGS.background_volume,
-        pitch_shift_frequency=0.5,
+        pitch_shift_frequency=0.0,
         pitch_shift=2.0,
         time_stretch_frequency=0.5,
-        time_stretch=0.2,
+        time_stretch=0.1,
         time_shift=time_shift_samples,
         mode='training',
         sess=sess
     )
-    train_data_iter = input_data.MpIterator(train_data_iter)
+    #train_data_iter = input_data.MpIterator(train_data_iter)
 
     training_steps_max = np.sum(training_steps_list)
     for training_step in range(start_step, training_steps_max + 1):
@@ -302,6 +317,10 @@ def main(_):
         }
         if (training_step % 500) == 0 or is_last_step:
             ops['merged_summaries'] = merged_summaries
+
+        #import librosa as lr
+        #for i in range(train_samples.shape[0]):
+        #    lr.output.write_wav("./temp/%d-%d.wav" % (training_step,i), train_samples[i, :], 16000)
 
         results = sess.run(
             ops,
@@ -355,6 +374,9 @@ def main(_):
             checkpoint_path = os.path.join(output_dir, FLAGS.model + '.ckpt')
             tf.logging.info('Saving to "%s-%d"', checkpoint_path, training_step)
             saver.save(sess, checkpoint_path, global_step=training_step)
+
+    if isinstance(train_data_iter, input_data.MpIterator):
+        train_data_iter.shutdown()
 
     test_set_size = audio_processor.set_size('testing')
     tf.logging.info('set_size=%d', test_set_size)
@@ -430,7 +452,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--unknown_percentage',
         type=float,
-        default=9.0,
+        default=11.0,
         help="""\
       How much of the training data should be unknown words.
       """)
@@ -484,12 +506,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--how_many_training_steps',
         type=str,
-        default='1000,10000,5000,2000', #'30000,5000'
+        default='30000,5000', #'5000,18000,8000,2000', #'30000,5000',
         help='How many training loops to run', )
     parser.add_argument(
         '--learning_rate',
         type=str,
-        default='.0001,0.001,0.0001,0.00001', #'0.0001,0.00001',
+        default='0.0001,0.00001', #'.1,0.01,0.001,0.0001'
         help='How large a learning rate to use when training.')
     parser.add_argument(
         '--batch_size',

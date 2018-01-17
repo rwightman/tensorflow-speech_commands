@@ -130,8 +130,12 @@ def create_model(sample_input, model_settings, model_architecture,
         return create_conv_model(
             sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
-    elif model_architecture == 'conv1d_lame':
-        return create_conv1d_lame_model(
+    elif model_architecture == 'conv1d_basic2':
+        return create_conv1d_basic2_model(
+            sample_input, model_settings,
+            dropout_prob=dropout_prob, is_training=is_training)
+    elif model_architecture == 'conv1d_basic3':
+        return create_conv1d_basic3_model(
             sample_input, model_settings,
             dropout_prob=dropout_prob, is_training=is_training)
     elif model_architecture == 'conv1d_a':
